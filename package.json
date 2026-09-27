@@ -8,6 +8,7 @@
     "dev:server": "node --watch server/server.js",
     "dev:web": "vite --host 127.0.0.1 --port 5174",
     "build": "vite build",
+    "postinstall": "npm run build",
     "start": "node server/server.js",
     "test": "node --test"
   },
