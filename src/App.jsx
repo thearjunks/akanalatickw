@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Activity, AlertTriangle, BarChart3, Bot, Bug, CheckCircle2, Clock3, Download, GitCompareArrows,
   Eye, Globe2, Languages, Link2, MousePointer2, Radio, RefreshCw, Route, Search, Siren,
-  Send, Settings2, ShieldCheck, ShoppingCart, Smartphone, TrendingUp, UserMinus, Users, X, XCircle, LogOut, LockKeyhole, UserCog
+  Send, Settings2, ShieldCheck, ShoppingCart, Smartphone, TrendingUp, UserMinus, Users, X, XCircle, LogOut, LockKeyhole, UserCog,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react'
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart,
@@ -140,17 +141,48 @@ function DrillMetric({ icon: Icon, label, value, detail, tone = 'green', onClick
 
 function MainOverviewView({ data, onOpen }) {
   const [salesType, setSalesType] = useState('Plans')
+  const [voucherOrder, setVoucherOrder] = useState('selling')
+  const [deviceOrder, setDeviceOrder] = useState('selling')
+  const [activityCadence, setActivityCadence] = useState('daily')
   const [keywordCountry, setKeywordCountry] = useState('Kuwait')
   const [keywordRegion, setKeywordRegion] = useState('all')
+  const activityTrend = useMemo(() => {
+    const bucketDate = raw => {
+      const iso = `${raw || ''}`.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
+      const date = new Date(`${iso}T00:00:00Z`)
+      if (Number.isNaN(date.valueOf()) || activityCadence === 'daily') return raw
+      if (activityCadence === 'monthly') return `${raw.slice(0, 6)}01`
+      date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7))
+      return date.toISOString().slice(0, 10).replaceAll('-', '')
+    }
+    const grouped = new Map()
+    for (const row of data?.appActivity?.trend || []) {
+      const date = bucketDate(row.date)
+      const item = grouped.get(date) || { date, installs: 0, uninstalls: 0, androidInstalls: 0, iosInstalls: 0 }
+      const os = `${row.operatingSystem || row.platform || ''}`.toLowerCase()
+      if (row.eventName === 'first_open') { item.installs += row.eventCount || 0; if (os.includes('android')) item.androidInstalls += row.eventCount || 0; if (os.includes('ios')) item.iosInstalls += row.eventCount || 0 }
+      if (row.eventName === 'app_remove') item.uninstalls += row.eventCount || 0
+      grouped.set(date, item)
+    }
+    return [...grouped.values()].sort((a, b) => a.date.localeCompare(b.date))
+  }, [data, activityCadence])
   if (!data) return <Panel title="Main overview" subtitle="Loading connected analytics"><EmptyPanel title="Loading overview" copy="Querying sales, journeys, engagement, lifecycle and audience data." /></Panel>
   const topFailures = data.failures?.slice(0, 10) || []
   const topEngagement = data.engagement?.slice(0, 10) || []
-  const topDevices = data.devices?.slice(0, 12) || []
+  const orderedSales = (rows, order) => [...(rows || [])].sort((a, b) => order === 'recent' ? `${b.latestPurchaseDate || ''}`.localeCompare(`${a.latestPurchaseDate || ''}`) || (b.itemsPurchased || 0) - (a.itemsPurchased || 0) : (b.itemsPurchased || 0) - (a.itemsPurchased || 0)).slice(0, 25)
+  const topDevices = orderedSales(data.devices, deviceOrder)
+  const topVouchers = orderedSales(data.vouchers, voucherOrder)
   const reported = value => value && value !== '(not set)' ? value : 'Not reported'
-  const selectedSales = (data.salesItems || []).filter(row => row.productType === salesType && (row.itemsPurchased || 0) > 0)
+  const planSegments = ['Prepaid', 'Postpaid', 'Youth postpaid', 'Postpaid internet', 'VIP postpaid', 'Roaming', 'Other']
+  const selectedPlanSegment = salesType.startsWith('plan:') ? salesType.slice(5) : null
+  const salesLabel = selectedPlanSegment ? `${selectedPlanSegment} plans` : salesType
+  const selectedSales = (data.salesItems || []).filter(row => (selectedPlanSegment ? row.productType === 'Plans' && row.purchaseSegment === selectedPlanSegment : row.productType === salesType) && (row.itemsPurchased || 0) > 0)
+  const selectedSalesTotal = selectedPlanSegment ? selectedSales.reduce((total, row) => total + (row.itemsPurchased || 0), 0) : data.purchases.find(row => row.productType === salesType)?.count || 0
   const highSellers = selectedSales.slice(0, 8)
   const lowSellers = [...selectedSales].sort((a, b) => (a.itemsPurchased || 0) - (b.itemsPurchased || 0)).slice(0, 8)
-  const salesRows = (rows, emptyCopy) => <div className="table-wrap"><table><thead><tr><th>Item / plan</th><th>Variant</th><th>Category</th><th>Item ID</th><th>{salesType === 'Qitaf' ? 'Completed events' : 'Units sold'}</th><th>Revenue</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.itemId}-${row.itemVariant}-${index}`} className="click-row" onClick={() => onOpen(salesType === 'Devices' ? 'plans-items' : 'funnels', null, salesType === 'Vouchers' ? 'voucher' : salesType.startsWith('Roaming') ? 'roamingBundles' : salesType === 'Qitaf' ? 'qitafJoin' : 'prepaid')}><td><b>{reported(row.itemName)}</b><small>{reported(row.itemBrand)}</small></td><td>{reported(row.itemVariant)}</td><td>{reported(row.itemCategory3 || row.itemCategory2 || row.itemCategory)}</td><td>{reported(row.itemId)}</td><td>{number(row.itemsPurchased)}</td><td>{row.itemRevenue == null ? '—' : number(row.itemRevenue)}</td></tr>)}{!rows.length && <tr><td colSpan="6" className="table-empty">{emptyCopy}</td></tr>}</tbody></table></div>
+  const funnelForType = productType => productType === 'Vouchers' ? 'voucher' : productType === 'Recharges' ? 'recharge' : productType.startsWith('Roaming') ? 'roamingBundles' : productType === 'Qitaf' ? 'qitafJoin' : 'prepaid'
+  const funnelForSegment = segment => segment === 'Youth postpaid' ? 'youthPostpaid' : segment === 'Postpaid internet' ? 'postpaidInternet' : segment === 'VIP postpaid' ? 'vipPostpaid' : segment === 'Roaming' ? 'roamingBundles' : segment === 'Postpaid' ? 'postpaid' : 'prepaid'
+  const salesRows = (rows, emptyCopy) => <div className="table-wrap"><table><thead><tr><th>Item</th><th>Plan name</th><th>Offer ID</th><th>Variant</th><th>Category</th><th>Item ID</th><th>{salesType === 'Qitaf' ? 'Completed events' : 'Units sold'}</th><th>Revenue</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.itemId}-${row.itemVariant}-${index}`} className="click-row" onClick={() => onOpen(salesType === 'Devices' ? 'plans-items' : 'funnels', null, selectedPlanSegment ? funnelForSegment(selectedPlanSegment) : funnelForType(salesType))}><td><b>{reported(row.itemName)}</b><small>{reported(row.itemBrand)}</small></td><td><b>{reported(row.planName)}</b></td><td><code>{reported(row.offerId)}</code></td><td>{reported(row.itemVariant)}</td><td>{reported(row.itemCategory3 || row.itemCategory2 || row.itemCategory)}</td><td><code>{reported(row.itemId)}</code></td><td>{number(row.itemsPurchased)}</td><td>{row.itemRevenue == null ? '—' : number(row.itemRevenue)}</td></tr>)}{!rows.length && <tr><td colSpan="8" className="table-empty">{emptyCopy}</td></tr>}</tbody></table></div>
   const keywordRows = data.keywords?.siteSearch || []
   const keywordCountries = [...new Set(keywordRows.map(row => row.country).filter(value => value && !['(not set)','(other)'].includes(value)))].sort()
   const keywordRegions = [...new Set(keywordRows.filter(row => keywordCountry === 'all' || row.country === keywordCountry).map(row => row.region).filter(value => value && !['(not set)','(other)'].includes(value)))].sort()
@@ -167,6 +199,14 @@ function MainOverviewView({ data, onOpen }) {
   }
   const topKeywords = [...keywordMap.values()].sort((a,b) => b.uses - a.uses).slice(0, 25)
   return <>
+    <section className="overview-hero">
+      <div>
+        <p>Performance command centre</p>
+        <h2>Sales, journeys and customers at a glance</h2>
+        <span>Start with the four headline signals, then review sales, journey health and audience behaviour below.</span>
+      </div>
+      <div className="overview-hero-guide"><span>01</span>Snapshot <i/> <span>02</span>Sales <i/> <span>03</span>Journeys <i/> <span>04</span>Audience</div>
+    </section>
     <section className="metric-grid overview-kpis">
       <DrillMetric icon={Siren} label="Journey failure events" value={data.summary.failureEvents} detail="Open failure records" tone="amber" onClick={() => onOpen('journey-monitoring')} />
       <DrillMetric icon={ShoppingCart} label="Recorded purchase events" value={data.summary.purchases} detail="Open plans and items" onClick={() => onOpen('plans-items')} />
@@ -174,27 +214,41 @@ function MainOverviewView({ data, onOpen }) {
       <DrillMetric icon={UserMinus} label="App uninstall events" value={data.summary.uninstalls} detail="Android app_remove coverage" tone="purple" onClick={() => onOpen('lifecycle')} />
     </section>
     <section className="overview-grid">
-      <Panel title="Purchases by offer type" subtitle="GA4 purchased-item counts where item detail is available">
-        {data.purchases?.length ? <div className="overview-card-list">{data.purchases.map(row => <button key={row.productType} onClick={() => onOpen(row.productType === 'Devices' ? 'plans-items' : 'funnels', null, row.productType === 'Vouchers' ? 'voucher' : row.productType.startsWith('Roaming') ? 'roamingBundles' : row.productType === 'Qitaf' ? 'qitafJoin' : 'prepaid')}><span>{row.productType}</span><strong>{number(row.count)}</strong><small>Open dashboard →</small></button>)}</div> : <EmptyPanel title="No purchase breakdown" copy={data.availability.purchases || data.availability.devices || 'No purchase events were reported for this period.'} />}
+      <div className="overview-section-title"><span>01</span><div><h2>Sales and product performance</h2><p>Completed purchases, offer mix and the items driving sales.</p></div></div>
+      <Panel className="overview-sales-panel" title="Purchases by offer type" subtitle="GA4 purchased-item counts where item detail is available">
+        {data.purchases?.length ? <div className="overview-card-list">{data.purchases.map(row => <button key={row.productType} onClick={() => onOpen(row.productType === 'Devices' ? 'plans-items' : 'funnels', null, funnelForType(row.productType))}><span>{row.productType}</span><strong>{number(row.count)}</strong><small>Open dashboard →</small></button>)}</div> : <EmptyPanel title="No purchase breakdown" copy={data.availability.purchases || data.availability.devices || 'No purchase events were reported for this period.'} />}
+        <div className="panel-note"><b>Completed plan and number purchases</b><br/>Purchased units by prepaid, postpaid and youth journey</div>
+        <div className="overview-card-list">{(data.completedPlanPurchases?.segments || []).map(row => <button key={row.segment} onClick={() => onOpen('funnels', null, row.segment === 'Prepaid' ? 'prepaid' : row.segment === 'Youth postpaid' ? 'youthPostpaid' : row.segment === 'Postpaid internet' ? 'postpaidInternet' : row.segment === 'VIP postpaid' ? 'vipPostpaid' : row.segment === 'Roaming' ? 'roamingBundles' : 'postpaid')}><span>{row.segment}</span><strong>{number(row.segment === 'Prepaid' ? data.completedPlanPurchases.strictPrepaid?.completions : row.count)}</strong><small>{row.segment === 'Prepaid' ? `${number(data.completedPlanPurchases.strictPrepaid?.users)} users · purchase_prepaid →` : 'Purchased units →'}</small></button>)}</div>
+        <p className="panel-note">Prepaid shows completed <code>purchase_prepaid</code> events and reported users because GA4 does not send item quantities for those App completions. Other journey cards remain GA4 <code>itemsPurchased</code> units; unclassified rows remain under Other.</p>
+        <div className="panel-note"><b>Recharge purchases</b><br/>Kept separate from completed plan and number purchases</div>
+        <div className="overview-card-list">{(data.rechargePurchases || []).filter(row => row.segment !== 'Other').map(row => <button key={`recharge-${row.segment}`} onClick={() => onOpen('funnels', null, row.segment === 'Postpaid' ? 'quickPay' : 'recharge')}><span>{row.segment} recharge</span><strong>{number(row.count)}</strong><small>Purchased units →</small></button>)}</div>
       </Panel>
-      <Panel title="App activity" subtitle="GA4 first_open and app_remove by operating system">
+      <Panel className="overview-app-panel" title="App activity" subtitle="GA4 first_open and app_remove by operating system">
         <div className="app-os-grid">{['android','ios'].map(os => <button key={os} onClick={() => onOpen('lifecycle')}><span>{os === 'ios' ? 'iOS' : 'Android'}</span><strong>{number(data.appActivity[os].installs)}</strong><small>installs / first opens</small><small>{number(data.appActivity[os].installUsers)} unique install users</small><div><b>{number(data.appActivity[os].uninstalls)}</b> uninstall events<small>{number(data.appActivity[os].uninstallUsers)} unique uninstall users</small></div></button>)}</div>
         <p className="panel-note">“Unique users” is an aggregated GA4 count; the Data API does not expose personal user identities. iOS uninstall counts are normally unavailable in GA4, so zero means no <code>app_remove</code> event was reported—not proof that nobody uninstalled.</p>
+        <div className="app-insight-grid">
+          <article><span>App installs</span><strong>{number(data.appActivity.android.installs + data.appActivity.ios.installs)}</strong><div><small>Android <b>{number(data.appActivity.android.installs)}</b></small><small>iOS <b>{number(data.appActivity.ios.installs)}</b></small></div></article>
+          <article><span>App uninstalls</span><strong>{number(data.appActivity.android.uninstalls + data.appActivity.ios.uninstalls)}</strong><div><small>Android <b>{number(data.appActivity.android.uninstalls)}</b></small><small>iOS <b>{number(data.appActivity.ios.uninstalls)}</b></small></div></article>
+          <article><span>Unique install users</span><strong>{number(data.appActivity.android.installUsers)} / {number(data.appActivity.ios.installUsers)}</strong><div><small>Android <b>{number(data.appActivity.android.installUsers)}</b></small><small>iOS <b>{number(data.appActivity.ios.installUsers)}</b></small></div></article>
+          <article className="app-trend-card"><div className="app-trend-head"><span>Activity trend</span><select aria-label="App activity trend period" value={activityCadence} onChange={event => setActivityCadence(event.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>{activityTrend.length ? <><strong className={activityTrend.length > 1 && activityTrend.at(-1).installs < activityTrend.at(-2).installs ? 'trend-down' : 'trend-up'}>{activityTrend.length > 1 ? `${activityTrend.at(-1).installs >= activityTrend.at(-2).installs ? '↑' : '↓'} ${number(Math.abs(activityTrend.at(-1).installs - activityTrend.at(-2).installs))}` : number(activityTrend[0].installs)}</strong><small>{activityTrend.length > 1 ? 'latest install change' : 'installs in selected period'}</small><div className="app-mini-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={activityTrend} margin={{top:5,right:0,left:0,bottom:0}}><CartesianGrid stroke="#e7eee9" vertical={false}/><XAxis dataKey="date" tickFormatter={dateLabel} tickLine={false} axisLine={false} interval="preserveStartEnd" fontSize={8}/><YAxis hide/><Tooltip labelFormatter={dateLabel}/><Bar dataKey="installs" name="Installs" fill="#24d17e" radius={[3,3,0,0]}/><Bar dataKey="uninstalls" name="Uninstalls" fill="#fb7185" radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></div></> : <small>No trend rows reported</small>}</article>
+        </div>
       </Panel>
-      <Panel className="overview-wide sales-intelligence" title="Completed sales quick view" subtitle="Highest- and lowest-selling reported items for every offer type" action={<label className="scope-filter">Offer type<select aria-label="Completed sales offer type" value={salesType} onChange={event => setSalesType(event.target.value)}>{data.purchases.map(row => <option key={row.productType} value={row.productType}>{row.productType}</option>)}</select></label>}>
-        <div className="sales-snapshot"><div><span>Selected type</span><strong>{salesType}</strong></div><div><span>{salesType === 'Qitaf' ? 'Completed Qitaf events' : 'Total purchased units'}</span><strong>{number(data.purchases.find(row => row.productType === salesType)?.count || 0)}</strong></div><div><span>Reported item rows</span><strong>{number(selectedSales.length)}</strong></div><div><span>Completion signal</span><strong>{salesType === 'Qitaf' ? 'joined / earned / spent' : data.purchaseEvents.find(row => `${row.eventName}`.toLowerCase().includes(salesType === 'Vouchers' ? 'voucher' : salesType === 'Devices' ? 'device' : salesType.startsWith('Roaming') ? 'roaming' : salesType === 'Add-ons' ? 'addon' : 'purchase'))?.eventName || 'purchase / item metric'}</strong></div></div>
+      <Panel className="overview-wide sales-intelligence" title="Completed sales quick view" subtitle="Highest- and lowest-selling reported items for every offer type" action={<label className="scope-filter">Offer type<select aria-label="Completed sales offer type" value={salesType} onChange={event => setSalesType(event.target.value)}><optgroup label="Offer types">{data.purchases.map(row => <option key={row.productType} value={row.productType}>{row.productType}</option>)}</optgroup><optgroup label="Plan journeys">{planSegments.map(segment => <option key={segment} value={`plan:${segment}`}>{segment}</option>)}</optgroup></select></label>}>
+        <div className="sales-snapshot"><div><span>Selected type</span><strong>{salesLabel}</strong></div><div><span>{salesType === 'Qitaf' ? 'Completed Qitaf events' : 'Total purchased units'}</span><strong>{number(selectedSalesTotal)}</strong></div><div><span>Reported item rows</span><strong>{number(selectedSales.length)}</strong></div><div><span>Completion signal</span><strong>{salesType === 'Qitaf' ? 'joined / earned / spent' : selectedPlanSegment ? 'purchase · itemsPurchased' : data.purchaseEvents.find(row => `${row.eventName}`.toLowerCase().includes(salesType === 'Vouchers' ? 'voucher' : salesType === 'Devices' ? 'device' : salesType.startsWith('Roaming') ? 'roaming' : salesType === 'Add-ons' ? 'addon' : 'purchase'))?.eventName || 'purchase / item metric'}</strong></div></div>
         <div className="seller-grids">
-          <section><h3>High-selling {salesType.toLowerCase()}</h3><p>Top items by purchased units</p>{salesRows(highSellers, `No item-level ${salesType.toLowerCase()} purchases were reported.`)}</section>
-          <section><h3>Low-selling {salesType.toLowerCase()}</h3><p>Lowest non-zero items by purchased units</p>{salesRows(lowSellers, `No item-level ${salesType.toLowerCase()} purchases were reported.`)}</section>
+          <section><h3>High-selling {salesLabel.toLowerCase()}</h3><p>Top items by purchased units</p>{salesRows(highSellers, `No item-level ${salesLabel.toLowerCase()} purchases were reported.`)}</section>
+          <section><h3>Low-selling {salesLabel.toLowerCase()}</h3><p>Lowest non-zero items by purchased units</p>{salesRows(lowSellers, `No item-level ${salesLabel.toLowerCase()} purchases were reported.`)}</section>
         </div>
         <p className="panel-note">{salesType === 'Qitaf' ? 'Qitaf totals represent completed loyalty events: joined_qitaf, earned_points, and spend_points_activated. They are activities, not ecommerce sales or revenue.' : 'Low-selling lists exclude zero-unit rows. To keep the dashboard responsive, the quick view merges GA4’s 5,000 highest and 5,000 lowest purchased-item rows for the selected period. “Revenue” is shown only when GA4 received an item-level value; zero may indicate missing revenue instrumentation rather than a free item.'}</p>
       </Panel>
-      <Panel className="overview-wide" title="Latest journey failures" subtitle="Date, time, inferred journey, failure point and affected users" action={<button className="secondary-button compact" onClick={() => onOpen('journey-monitoring')}>View all</button>}>
-        <div className="table-wrap"><table><thead><tr><th>Date and time</th><th>Journey</th><th>Page / screen</th><th>Failure point</th><th>Issue</th><th>Users</th><th>Events</th></tr></thead><tbody>
-          {topFailures.map((row, index) => <tr key={`${row.dateHourMinute}-${row.eventName}-${index}`} className="click-row" onClick={() => onOpen('journey-monitoring')}><td className="nowrap">{dateTimeLabel(row.dateHourMinute)}</td><td>{row.journey}</td><td>{row.pagePath || row.unifiedScreenName || 'Not reported'}</td><td><span className="issue-step">{row.step}</span></td><td>{row.issue}</td><td>{number(row.totalUsers)}</td><td>{number(row.eventCount)}</td></tr>)}
-          {!topFailures.length && <tr><td colSpan="7" className="table-empty">{data.availability.failures || 'No failure events were reported for this period.'}</td></tr>}
+      <div className="overview-section-title"><span>02</span><div><h2>Journey health</h2><p>See where customers are blocked and open the detailed failure record.</p></div></div>
+      <Panel className="overview-wide" title="Latest journey failures" subtitle="Date, source, app version, inferred journey, failure point and affected users" action={<button className="secondary-button compact" onClick={() => onOpen('journey-monitoring')}>View all</button>}>
+        <div className="table-wrap"><table><thead><tr><th>Date and time</th><th>Source</th><th>App version</th><th>Journey</th><th>Page / screen</th><th>Failure point</th><th>Issue</th><th>Users</th><th>Events</th></tr></thead><tbody>
+          {topFailures.map((row, index) => <tr key={`${row.dateHourMinute}-${row.eventName}-${index}`} className="click-row" onClick={() => onOpen('journey-monitoring')}><td className="nowrap">{dateTimeLabel(row.dateHourMinute)}</td><td><b>{row.channel || 'Not reported'}</b><small>{row.channel === 'App' ? row.platform || row.operatingSystem || 'Not reported' : 'Website'}</small></td><td>{row.channel === 'App' ? row.appVersion || 'Not reported' : 'Not applicable'}</td><td>{row.journey}</td><td>{row.pagePath || row.unifiedScreenName || 'Not reported'}</td><td><span className="issue-step">{row.step}</span></td><td>{row.issue}</td><td>{number(row.totalUsers)}</td><td>{number(row.eventCount)}</td></tr>)}
+          {!topFailures.length && <tr><td colSpan="9" className="table-empty">{data.availability.failures || 'No failure events were reported for this period.'}</td></tr>}
         </tbody></table></div>
       </Panel>
+      <div className="overview-section-title"><span>03</span><div><h2>Audience and discovery</h2><p>Understand the pages, searches and customer groups generating activity.</p></div></div>
       <Panel title="Most-used links and journeys" subtitle="Top pages by views and active users">
         {topEngagement.length ? <div className="compact-list overview-links">{topEngagement.map((row, index) => <button key={`${row.pagePath}-${index}`} onClick={() => onOpen('journey', row.pagePath)}><span className="rank">{String(index + 1).padStart(2, '0')}</span><span><b>{row.pageTitle || row.pagePath}</b><small>{row.journey} · {row.pagePath}</small></span><strong>{number(row.screenPageViews)}</strong></button>)}</div> : <EmptyPanel title="No engagement rows" copy={data.availability.engagement || 'No page activity was reported.'} />}
       </Panel>
@@ -209,11 +263,20 @@ function MainOverviewView({ data, onOpen }) {
         {topKeywords.length ? <div className="keyword-layout"><div className="bar-list keyword-bars">{topKeywords.slice(0,10).map((row,index) => <div className="bar-row" key={row.term}><div><span>{row.term}</span><strong>{number(row.uses)}</strong></div><div className="bar-track"><i style={{width:`${row.uses / Math.max(1,topKeywords[0].uses) * 100}%`,background:palette[index % palette.length]}}/></div></div>)}</div><div className="table-wrap"><table><thead><tr><th>Search word</th><th>Searches</th><th>Users</th><th>Platform</th><th>Country</th><th>Governorate / region</th></tr></thead><tbody>{topKeywords.map(row => <tr key={row.term}><td><b>{row.term}</b></td><td>{number(row.uses)}</td><td>{number(row.users)}</td><td>{[...row.platforms].join(', ') || 'Not reported'}</td><td>{[...row.countries].join(', ') || 'Not reported'}</td><td>{[...row.regions].slice(0,3).join(', ') || 'Not reported'}</td></tr>)}</tbody></table></div></div> : <EmptyPanel title="No website searches reported" copy={data.availability.siteSearch || 'GA4 returned no customer website/app search terms for this country and governorate selection.'} />}
         <div className="coverage-note keyword-coverage"><ShieldCheck size={17}/><div><strong>What is included</strong><span>This table contains only actual <code>view_search_results</code> searches with a <code>search_term</code>. UTM terms are kept in Campaigns &amp; UTM and are not presented as customer searches. {data.availability.googleOrganicSearch}</span></div></div>
       </Panel>
-      <Panel className="overview-wide" title="Completed device purchases" subtitle="Purchased devices by category, model and variant" action={<button className="secondary-button compact" onClick={() => onOpen('plans-items')}>View products</button>}>
-        <div className="table-wrap"><table><thead><tr><th>Category</th><th>Model</th><th>Variant</th><th>Item ID</th><th>Brand</th><th>Purchased units</th><th>Revenue</th></tr></thead><tbody>
-          {topDevices.map((row, index) => <tr key={`${row.itemId}-${row.itemVariant}-${index}`} className="click-row" onClick={() => onOpen('plans-items')}><td>{reported(row.itemCategory3 || row.itemCategory2 || row.itemCategory) === 'Not reported' ? 'Device' : reported(row.itemCategory3 || row.itemCategory2 || row.itemCategory)}</td><td>{reported(row.itemName)}</td><td>{reported(row.itemVariant)}</td><td>{reported(row.itemId)}</td><td>{reported(row.itemBrand)}</td><td>{number(row.itemsPurchased)}</td><td>{row.itemRevenue == null ? '—' : number(row.itemRevenue)}</td></tr>)}
-          {!topDevices.length && <tr><td colSpan="7" className="table-empty">{data.availability.devices || 'No purchased-device rows with item detail were reported.'}</td></tr>}
+      <div className="overview-section-title"><span>04</span><div><h2>Product sales detail</h2><p>Compare top-selling and recently reported voucher and device purchases.</p></div></div>
+      <Panel className="overview-wide" title="Purchased vouchers" subtitle="Voucher sales by brand, denomination, platform and latest reported purchase date" action={<div className="detail-panel-actions"><select aria-label="Voucher sales order" value={voucherOrder} onChange={event => setVoucherOrder(event.target.value)}><option value="selling">Best selling</option><option value="recent">Recently sold</option></select><button className="secondary-button compact" onClick={() => onOpen('funnels', null, 'voucher')}>View voucher funnel</button></div>}>
+        <div className="table-wrap"><table><thead><tr><th>Latest reported</th><th>Brand</th><th>Voucher</th><th>Denomination / variant</th><th>Item ID</th><th>Platform</th><th>Purchased units</th><th>Revenue</th></tr></thead><tbody>
+          {topVouchers.map((row, index) => <tr key={`${row.platform}-${row.itemId}-${row.itemVariant}-${index}`} className="click-row" onClick={() => onOpen('funnels', null, 'voucher')}><td className="nowrap">{row.latestPurchaseDate ? dateLabel(row.latestPurchaseDate) : 'Not reported'}</td><td>{reported(row.itemBrand)}</td><td>{reported(row.itemName)}</td><td>{reported(row.itemVariant || row.itemCategory3 || row.itemCategory2)}</td><td>{reported(row.itemId)}</td><td>{reported(row.platform)}</td><td>{number(row.itemsPurchased)}</td><td>{row.itemRevenue == null ? '—' : number(row.itemRevenue)}</td></tr>)}
+          {!topVouchers.length && <tr><td colSpan="8" className="table-empty">{data.availability.purchases || 'No purchased-voucher rows with item detail were reported.'}</td></tr>}
         </tbody></table></div>
+        <p className="panel-note">Recently sold uses the latest GA4 purchase date reported for each aggregated voucher row. GA4 Data API does not expose an individual customer’s exact purchase sequence here.</p>
+      </Panel>
+      <Panel className="overview-wide" title="Completed device purchases" subtitle="Purchased devices by category, model, variant, platform and latest reported purchase date" action={<div className="detail-panel-actions"><select aria-label="Device sales order" value={deviceOrder} onChange={event => setDeviceOrder(event.target.value)}><option value="selling">Best selling</option><option value="recent">Recently sold</option></select><button className="secondary-button compact" onClick={() => onOpen('plans-items')}>View products</button></div>}>
+        <div className="table-wrap"><table><thead><tr><th>Latest reported</th><th>Category</th><th>Model</th><th>Variant</th><th>Item ID</th><th>Brand</th><th>Platform</th><th>Purchased units</th><th>Revenue</th></tr></thead><tbody>
+          {topDevices.map((row, index) => <tr key={`${row.platform}-${row.itemId}-${row.itemVariant}-${index}`} className="click-row" onClick={() => onOpen('plans-items')}><td className="nowrap">{row.latestPurchaseDate ? dateLabel(row.latestPurchaseDate) : 'Not reported'}</td><td>{reported(row.itemCategory3 || row.itemCategory2 || row.itemCategory) === 'Not reported' ? 'Device' : reported(row.itemCategory3 || row.itemCategory2 || row.itemCategory)}</td><td>{reported(row.itemName)}</td><td>{reported(row.itemVariant)}</td><td>{reported(row.itemId)}</td><td>{reported(row.itemBrand)}</td><td>{reported(row.platform)}</td><td>{number(row.itemsPurchased)}</td><td>{row.itemRevenue == null ? '—' : number(row.itemRevenue)}</td></tr>)}
+          {!topDevices.length && <tr><td colSpan="9" className="table-empty">{data.availability.devices || 'No purchased-device rows with item detail were reported.'}</td></tr>}
+        </tbody></table></div>
+        <p className="panel-note">Best selling ranks purchased units. Recently sold ranks the latest GA4 purchase date for each aggregated device row. All, Web and App follow the dashboard platform filter.</p>
       </Panel>
       <div className="coverage-note overview-wide"><ShieldCheck size={17}/><div><strong>Coverage</strong><span>All values use the selected date and platform filters. Journey labels are inferred from reported page paths and event names when GA4 does not attach a journey identifier. Nationality appears only if a consented registered custom dimension becomes available.</span></div></div>
     </section>
@@ -701,7 +764,7 @@ function JourneyMonitoringView({ data }) {
   const [step, setStep] = useState('all')
   const [search, setSearch] = useState('')
   const steps = useMemo(() => [...new Set((data?.issues || []).map(row => row.step))].sort(), [data])
-  const issues = useMemo(() => (data?.issues || []).filter(row => (step === 'all' || row.step === step) && `${row.pagePath || ''} ${row.pageTitle || ''} ${row.eventName} ${row.issue}`.toLowerCase().includes(search.toLowerCase())), [data, step, search])
+  const issues = useMemo(() => (data?.issues || []).filter(row => (step === 'all' || row.step === step) && `${row.pagePath || ''} ${row.pageTitle || ''} ${row.eventName} ${row.issue} ${row.channel || ''} ${row.platform || ''} ${row.operatingSystem || ''} ${row.appVersion || ''}`.toLowerCase().includes(search.toLowerCase())), [data, step, search])
   if (!data) return <Panel title="Journey Monitoring" subtitle="Loading failure signals"><EmptyPanel title="Loading blocked journeys" copy="Querying failed, cancelled and payment events from GA4." /></Panel>
   return <>
     <section className="metric-grid">
@@ -712,12 +775,12 @@ function JourneyMonitoringView({ data }) {
     </section>
     <section className="dashboard-grid">
       <Panel className="table-panel" title="Blocked journey details" subtitle={`${number(issues.length)} matching issue rows · ${data.period.startDate} to ${data.period.endDate}`} action={<div className="inventory-actions"><select aria-label="Filter journey step" value={step} onChange={event => setStep(event.target.value)}><option value="all">All journey steps</option>{steps.map(item => <option value={item} key={item}>{item}</option>)}</select><div className="search-box"><Search size={16}/><input aria-label="Search journey issues" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search page or issue"/></div></div>}>
-        <div className="table-wrap"><table><thead><tr><th>Date & time</th><th>Affected page / screen</th><th>Journey step</th><th>Issue</th><th>Plan / product</th><th>Reference</th><th>User details</th><th>Users affected</th><th>Events</th></tr></thead><tbody>
-          {issues.map((row, index) => <tr key={`${row.dateHourMinute}-${row.eventName}-${row.pagePath}-${index}`}><td className="nowrap">{dateTimeLabel(row.dateHourMinute)}</td><td>{row.pagePath ? <><strong>{row.pagePath}</strong>{row.pageTitle && <small>{row.pageTitle}</small>}</> : 'Page not reported'}</td><td><span className="issue-step">{row.step}</span></td><td>{row.issue}<small><code>{row.eventName}</code></small></td><td>{row.itemName || row.itemId || 'Not reported'}{row.itemName && row.itemId && <small>ID: {row.itemId}</small>}</td><td>{row.transactionId || 'Not reported'}</td><td>Not available in GA4</td><td>{number(row.totalUsers)}</td><td>{number(row.eventCount)}</td></tr>)}
-          {!issues.length && <tr><td colSpan="9" className="table-empty">No failed or cancelled journey events match these filters.</td></tr>}
+        <div className="table-wrap"><table><thead><tr><th>Date & time</th><th>Source</th><th>App version</th><th>Affected page / screen</th><th>Journey step</th><th>Issue</th><th>Plan / product</th><th>Reference</th><th>User details</th><th>Users affected</th><th>Events</th></tr></thead><tbody>
+          {issues.map((row, index) => <tr key={`${row.dateHourMinute}-${row.platform}-${row.appVersion}-${row.eventName}-${row.pagePath}-${index}`}><td className="nowrap">{dateTimeLabel(row.dateHourMinute)}</td><td><b>{row.channel || 'Not reported'}</b><small>{row.platform || row.operatingSystem || 'Not reported'}</small></td><td>{row.channel === 'App' ? row.appVersion || 'Not reported' : 'Not applicable'}</td><td>{row.pagePath ? <><strong>{row.pagePath}</strong>{row.pageTitle && <small>{row.pageTitle}</small>}</> : 'Page not reported'}</td><td><span className="issue-step">{row.step}</span></td><td>{row.issue}<small><code>{row.eventName}</code></small></td><td>{row.itemName || row.itemId || 'Not reported'}{row.itemName && row.itemId && <small>ID: {row.itemId}</small>}</td><td>{row.transactionId || 'Not reported'}</td><td>Not available in GA4</td><td>{number(row.totalUsers)}</td><td>{number(row.eventCount)}</td></tr>)}
+          {!issues.length && <tr><td colSpan="11" className="table-empty">No failed or cancelled journey events match these filters.</td></tr>}
         </tbody></table></div>
       </Panel>
-      <div className="coverage-note"><ShieldCheck size={17}/><div><strong>Data coverage and privacy</strong><span>{data.coverage.timestamp} {data.coverage.commerce} {data.coverage.userDetails} Affected users are aggregated per row and can overlap. “Page not reported” means the event arrived without page or screen context.</span></div></div>
+      <div className="coverage-note"><ShieldCheck size={17}/><div><strong>Data coverage and privacy</strong><span>{data.coverage.timestamp} {data.coverage.platform} {data.coverage.commerce} {data.coverage.userDetails} Affected users are aggregated per row and can overlap. “Page not reported” means the event arrived without page or screen context.</span></div></div>
     </section>
   </>
 }
@@ -736,9 +799,10 @@ function FunnelsView({ data, journey, onJourneyChange }) {
         <div className="gnl-summary"><div><span>Entered funnel</span><strong>{number(report.summary.entrants)}</strong></div><div><span>{data.outcomeLabel}</span><strong>{number(report.summary.recordedPurchaseEvents)}</strong><small>{number(report.summary.recordedPurchaseUsers)} users · <code>{report.summary.recordedPurchaseEvent}</code></small></div><div><span>Strict completions</span><strong>{number(report.summary.completions)}</strong></div><div><span>Failure events</span><strong>{number(report.summary.failureEvents)}</strong></div></div>
         <div className="journey-funnel">{report.steps.map((step, index) => <div className="journey-step" key={step.step}><span className="step-index">{index + 1}</span><div><div className="step-label"><span>{step.step}</span><strong>{number(step.activeUsers)} users</strong></div><div className="step-track"><i style={{width: `${report.summary.entrants ? Math.max(2, step.activeUsers / report.summary.entrants * 100) : 0}%`}}/></div><div className="step-meta"><span>{percent(step.completionRate)} advanced</span><span>{number(step.abandonments)} abandoned</span></div></div></div>)}</div>
         <div className="gnl-failures"><h3>Failure and cancellation signals</h3>{report.failures.map(row => <div key={row.eventName}><code>{row.eventName}</code><span>{number(row.totalUsers)} users</span><strong>{number(row.eventCount)} events</strong></div>)}</div>
+        {data.esimRelevant && <div className="gnl-failures"><h3>eSIM QR and activation · platform-wide signals</h3><div><span>eSIM activated</span><span>{number(report.esim.activated.totalUsers)} users</span><strong>{number(report.esim.activated.eventCount)} events</strong></div><div><span>eSIM activation failed</span><span>{number(report.esim.activationFailed.totalUsers)} users</span><strong>{number(report.esim.activationFailed.eventCount)} events</strong></div><div><span>QR generated / displayed</span><span>{report.esim.qrDeliveryInstrumented ? `${number(report.esim.qrGenerated.totalUsers)} users` : 'Not instrumented'}</span><strong>{report.esim.qrDeliveryInstrumented ? `${number(report.esim.qrGenerated.eventCount)} events` : '—'}</strong></div><div><span>QR not received / failed</span><span>{report.esim.qrDeliveryInstrumented ? `${number(report.esim.qrFailed.totalUsers)} users` : 'Not available'}</span><strong>{report.esim.qrDeliveryInstrumented ? `${number(report.esim.qrFailed.eventCount)} events` : 'Needs QR event'}</strong></div><p className="panel-note">Generic eSIM events do not carry a journey ID in the current GA4 response, so these are selected-platform totals and cannot yet be assigned exclusively to this journey.</p></div>}
       </article>)}
     </section>
-    <section className="dashboard-grid"><Panel className="table-panel" title="Complete event tracking checklist" subtitle={`${data.period.startDate} to ${data.period.endDate} · ${data.name} Web and App event names`}><div className="table-wrap"><table><thead><tr><th>Platform</th><th>Event</th><th>Users</th><th>Events</th><th>Interpretation</th></tr></thead><tbody>{data.reports.flatMap(report => report.events.map(row => <tr key={`${report.platform}-${row.eventName}`}><td>{report.platform}</td><td><code>{row.eventName}</code></td><td>{number(row.totalUsers)}</td><td>{number(row.eventCount)}</td><td>{report.failures.some(failure => failure.eventName === row.eventName) ? <span className="issue-step">Failure</span> : row.eventCount ? 'Tracked' : 'Not received'}</td></tr>))}</tbody></table></div></Panel><div className="coverage-note"><ShieldCheck size={17}/><div><strong>Coverage and interpretation</strong><span>{data.coverage.web} {data.coverage.app} {data.coverage.failures} Both <code>id_verify_startred</code> (the supplied spelling) and <code>id_verify_started</code> are monitored where applicable. “Completed purchase” means the ordered funnel reached a configured purchase event; GA4 cannot prove the user experienced no recoverable error earlier unless a journey ID is collected and joined in BigQuery. {sampled && `GA4 sampled this funnel (${number(Number(sampled.sampling.samplesReadCount))} of ${number(Number(sampled.sampling.samplingSpaceSize))} eligible events), so funnel counts are estimates.`}</span></div></div></section>
+    <section className="dashboard-grid"><Panel className="table-panel" title="Complete event tracking checklist" subtitle={`${data.period.startDate} to ${data.period.endDate} · ${data.name} Web and App event names`}><div className="table-wrap"><table><thead><tr><th>Platform</th><th>Event</th><th>Users</th><th>Events</th><th>Interpretation</th></tr></thead><tbody>{data.reports.flatMap(report => report.events.map(row => <tr key={`${report.platform}-${row.eventName}`}><td>{report.platform}</td><td><code>{row.eventName}</code></td><td>{number(row.totalUsers)}</td><td>{number(row.eventCount)}</td><td>{report.failures.some(failure => failure.eventName === row.eventName) ? <span className="issue-step">Failure</span> : row.eventCount ? 'Tracked' : 'Not received'}</td></tr>))}</tbody></table></div></Panel><div className="coverage-note"><ShieldCheck size={17}/><div><strong>Coverage and interpretation</strong><span>{data.coverage.web} {data.coverage.app} {data.coverage.failures} Both <code>id_verify_startred</code> (the supplied spelling) and <code>id_verify_started</code> are monitored where applicable. eSIM activation events do not prove whether a QR code was delivered. “QR not received” is shown only when a dedicated <code>esim_qr_failed</code> or <code>qr_code_failed</code> event is collected; otherwise it remains unavailable. “Completed purchase” means the ordered funnel reached a configured purchase event; GA4 cannot prove the user experienced no recoverable error earlier unless a journey ID is collected and joined in BigQuery. {sampled && `GA4 sampled this funnel (${number(Number(sampled.sampling.samplesReadCount))} of ${number(Number(sampled.sampling.samplingSpaceSize))} eligible events), so funnel counts are estimates.`}</span></div></div></section>
   </>
 }
 
@@ -763,14 +827,16 @@ function App() {
   const defaultFrom = new Date(Date.now() - 27 * 86400000).toISOString().slice(0, 10)
   const [customFrom, setCustomFrom] = useState(defaultFrom)
   const [customTo, setCustomTo] = useState(today)
-  const [appliedFrom, setAppliedFrom] = useState(defaultFrom)
-  const [appliedTo, setAppliedTo] = useState(today)
   const [scope, setScope] = useState('all')
+  const [appliedFilters, setAppliedFilters] = useState({ from: defaultFrom, to: today, scope: 'all' })
+  const [refreshKey, setRefreshKey] = useState(0)
+  const { from: appliedFrom, to: appliedTo, scope: appliedScope } = appliedFilters
   const [pageUrl, setPageUrl] = useState('https://www.stc.com.kw/en/prepaid-plans')
   const [view, setView] = useState(() => viewFromPath(window.location.pathname))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('eventscope-sidebar-collapsed') === 'true')
 
   const allowed = auth?.user?.dashboards || []
   const isSuperAdmin = auth?.user?.role === 'super_admin'
@@ -780,6 +846,20 @@ function App() {
     if (window.location.pathname !== path) window.history.pushState({}, '', path)
     setView(nextView)
   }, [])
+
+  const navigateFromSidebar = useCallback(nextView => {
+    navigate(nextView)
+    if (sidebarCollapsed) {
+      setSidebarCollapsed(false)
+      window.localStorage.setItem('eventscope-sidebar-collapsed', 'false')
+    }
+  }, [navigate, sidebarCollapsed])
+
+  function toggleSidebar() {
+    const next = !sidebarCollapsed
+    setSidebarCollapsed(next)
+    window.localStorage.setItem('eventscope-sidebar-collapsed', String(next))
+  }
 
   useEffect(() => {
     const syncView = () => setView(viewFromPath(window.location.pathname))
@@ -799,16 +879,16 @@ function App() {
     const startDate = appliedFrom
     const endDate = appliedTo
     const results = await Promise.allSettled([
-      request(`/dashboard?startDate=${startDate}&endDate=${endDate}&scope=${scope}`).then(setData),
-      request(`/realtime?scope=${scope}`).then(setRealtime),
-      request(`/page-journey?startDate=${startDate}&endDate=${endDate}&scope=${scope}&url=${encodeURIComponent(pageUrl)}`).then(setJourney),
-      request(`/app-lifecycle?startDate=${startDate}&endDate=${endDate}&scope=${scope}`).then(setLifecycle)
+      request(`/dashboard?startDate=${startDate}&endDate=${endDate}&scope=${appliedScope}`).then(setData),
+      request(`/realtime?scope=${appliedScope}`).then(setRealtime),
+      request(`/page-journey?startDate=${startDate}&endDate=${endDate}&scope=${appliedScope}&url=${encodeURIComponent(pageUrl)}`).then(setJourney),
+      request(`/app-lifecycle?startDate=${startDate}&endDate=${endDate}&scope=${appliedScope}`).then(setLifecycle)
     ])
     const failures = results.filter(result => result.status === 'rejected')
     if (failures.length === results.length) throw failures[0].reason
     if (failures.length) setError(`${failures.length} analytics report(s) could not be refreshed; available reports are shown.`)
     setLoading(false)
-  }, [appliedFrom, appliedTo, pageUrl, scope, status.connected])
+  }, [appliedFrom, appliedTo, pageUrl, appliedScope, status.connected])
 
   useEffect(() => { request('/auth/session').then(setAuth).catch(() => setAuth({ authenticated: false })) }, [])
 
@@ -816,72 +896,87 @@ function App() {
     if (!auth?.authenticated) return
     const permitted = isSuperAdmin || view === 'access-control' ? isSuperAdmin : allowed.includes(view)
     if (!permitted) navigate(allowed[0] || 'overview')
-    loadStatus().then(next => loadData(next.connected)).catch(error => { setError(error.message); setLoading(false) })
+    loadStatus().then(next => { if (!next.connected) setLoading(false) }).catch(error => { setError(error.message); setLoading(false) })
   }, [auth?.authenticated])
 
   useEffect(() => {
-    if (auth?.authenticated && status.connected) loadData(true).catch(error => { setError(error.message); setLoading(false) })
-  }, [appliedFrom, appliedTo, pageUrl, scope, auth?.authenticated])
+    if (!status.connected || !['legacy-overview', 'assistant'].includes(view)) return
+    loadData(true).catch(error => { setError(error.message); setLoading(false) })
+  }, [view, appliedFrom, appliedTo, pageUrl, appliedScope, refreshKey, auth?.authenticated, status.connected])
+
+  useEffect(() => {
+    if (view !== 'journey' || !status.connected) return
+    setLoading(true); setError('')
+    request(`/page-journey?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}&url=${encodeURIComponent(pageUrl)}`)
+      .then(setJourney).catch(error => setError(error.message)).finally(() => setLoading(false))
+  }, [view, appliedFrom, appliedTo, pageUrl, appliedScope, refreshKey, status.connected])
+
+  useEffect(() => {
+    if (!['lifecycle', 'comparison'].includes(view) || !status.connected) return
+    setLoading(true); setError('')
+    request(`/app-lifecycle?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
+      .then(setLifecycle).catch(error => setError(error.message)).finally(() => setLoading(false))
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.connected])
 
   useEffect(() => {
     if (view !== 'plans-items' || !status.connected) return
     setLoading(true); setError('')
-    request(`/products-items?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    request(`/products-items?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
       .then(setProducts).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, status.connected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.connected])
 
   useEffect(() => {
     if (view !== 'overview' || !status.connected) return
     setLoading(true); setError('')
-    request(`/main-overview?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    request(`/main-overview?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
       .then(setOverview).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, status.connected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.connected])
 
   const loadCampaigns = useCallback(async () => {
-    const next = await request(`/campaigns?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    const next = await request(`/campaigns?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
     setCampaigns(next)
-  }, [appliedFrom, appliedTo, scope])
+  }, [appliedFrom, appliedTo, appliedScope])
 
   useEffect(() => {
     if (view !== 'campaigns' || !status.connected) return
     setLoading(true); setError('')
     loadCampaigns().catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, loadCampaigns, status.connected])
+  }, [view, loadCampaigns, refreshKey, status.connected])
 
   useEffect(() => {
     if (!['adjust', 'comparison', 'assistant'].includes(view) || !status.adjustConnected) return
     setLoading(true); setError('')
-    request(`/adjust-installs?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    request(`/adjust-installs?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
       .then(setAdjust).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, status.adjustConnected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.adjustConnected])
 
   useEffect(() => {
     if (view !== 'quality' || !status.connected) return
     setLoading(true); setError('')
-    request(`/quality?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    request(`/quality?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
       .then(setQuality).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, status.connected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.connected])
 
   useEffect(() => {
     if (view !== 'journey-monitoring' || !status.connected) return
     setLoading(true); setError('')
-    request(`/journey-monitoring?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    request(`/journey-monitoring?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
       .then(setJourneyMonitoring).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, status.connected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.connected])
 
   useEffect(() => {
     if (view !== 'funnels' || !status.connected) return
     setLoading(true); setError('')
-    request(`/funnels?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}&journey=${funnelJourney}`)
+    request(`/funnels?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}&journey=${funnelJourney}`)
       .then(setFunnel).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, funnelJourney, status.connected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, funnelJourney, status.connected])
 
   useEffect(() => {
     if (view !== 'urls' || !status.connected) return
     setLoading(true); setError('')
-    request(`/url-inventory?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${scope}`)
+    request(`/url-inventory?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
       .then(setInventory).catch(error => setError(error.message)).finally(() => setLoading(false))
-  }, [view, appliedFrom, appliedTo, scope, status.connected])
+  }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.connected])
 
   async function saved() {
     const next = await loadStatus()
@@ -926,16 +1021,19 @@ function App() {
 
   function exportCurrentDashboard() {
     if (view === 'overview' && overview) downloadCsv('main-overview', [
-      { title: 'Journey failures', headers: ['Date and time','Journey','Page or screen','Failure point','Issue','Event','Users','Events'], rows: overview.failures.map(r => [dateTimeLabel(r.dateHourMinute),r.journey,r.pagePath || r.unifiedScreenName || '',r.step,r.issue,r.eventName,r.totalUsers,r.eventCount]) },
+      { title: 'Journey failures', headers: ['Date and time','Source','Platform','Operating system','App version','Journey','Page or screen','Failure point','Issue','Event','Users','Events'], rows: overview.failures.map(r => [dateTimeLabel(r.dateHourMinute),r.channel,r.platform || '',r.operatingSystem || '',r.channel === 'App' ? r.appVersion || 'Not reported' : 'Not applicable',r.journey,r.pagePath || r.unifiedScreenName || '',r.step,r.issue,r.eventName,r.totalUsers,r.eventCount]) },
       { title: 'Purchases by offer type', headers: ['Offer type','Purchased units or events'], rows: overview.purchases.map(r => [r.productType,r.count]) },
-      { title: 'High and low completed sales item rows', headers: ['Offer type','Journey','Item or plan','Variant','Item ID','Brand','Category','Category 2','Category 3','Purchased units','Revenue'], rows: overview.salesItems.map(r => [r.productType,r.journey,r.itemName,r.itemVariant,r.itemId,r.itemBrand,r.itemCategory,r.itemCategory2,r.itemCategory3,r.itemsPurchased,r.itemRevenue]) },
+      { title: 'High and low completed sales item rows', headers: ['Offer type','Journey','Platform','Latest reported purchase date','Item','Plan name','Offer ID','Variant','Item ID','Brand','Category','Category 2','Category 3','Purchased units','Revenue'], rows: overview.salesItems.map(r => [r.productType,r.journey,r.platform,r.latestPurchaseDate,r.itemName,r.planName,r.offerId,r.itemVariant,r.itemId,r.itemBrand,r.itemCategory,r.itemCategory2,r.itemCategory3,r.itemsPurchased,r.itemRevenue]) },
+      { title: 'Completed prepaid, postpaid and youth products', headers: ['Journey','Item','Plan name','Offer ID','Variant','Item ID','Offer type','Purchased units','Revenue'], rows: (overview.completedPlanPurchases?.products || []).map(r => [r.purchaseSegment,r.itemName,r.planName,r.offerId,r.itemVariant,r.itemId,r.productType,r.itemsPurchased,r.itemRevenue]) },
+      { title: 'Strict prepaid plan completions', headers: ['GA4 event','Completed events','Reported users'], rows: [[overview.completedPlanPurchases?.strictPrepaid?.eventName,overview.completedPlanPurchases?.strictPrepaid?.completions,overview.completedPlanPurchases?.strictPrepaid?.users]] },
       { title: 'App activity', headers: ['Operating system','Installs / first opens','Unique install users','Uninstall events','Unique uninstall users'], rows: [['Android',overview.appActivity.android.installs,overview.appActivity.android.installUsers,overview.appActivity.android.uninstalls,overview.appActivity.android.uninstallUsers],['iOS',overview.appActivity.ios.installs,overview.appActivity.ios.installUsers,overview.appActivity.ios.uninstalls,overview.appActivity.ios.uninstallUsers]] },
       { title: 'Engagement', headers: ['Journey','Page','Title','Views','Users'], rows: overview.engagement.map(r => [r.journey,r.pagePath,r.pageTitle,r.screenPageViews,r.activeUsers]) },
       { title: 'Customer locations', headers: ['Country','Region','Users','Purchases'], rows: overview.customers.locations.map(r => [r.country,r.region,r.activeUsers,r.ecommercePurchases]) },
       { title: 'Customer age groups', headers: ['Age group','Users','Purchases'], rows: overview.customers.ages.map(r => [r.userAgeBracket,r.activeUsers,r.ecommercePurchases]) },
       { title: 'On-site search terms by location', headers: ['Search term','Country','Region / governorate','Platform','Search events','Users'], rows: overview.keywords.siteSearch.map(r => [r.searchTerm,r.country,r.region,r.platform,r.eventCount,r.totalUsers]) },
       { title: 'Paid campaign terms by location', headers: ['Campaign term','Source','Medium','Country','Region / governorate','Sessions','Users','Purchases'], rows: overview.keywords.paidSearch.map(r => [r.sessionManualTerm,r.sessionSource,r.sessionMedium,r.country,r.region,r.sessions,r.activeUsers,r.ecommercePurchases]) },
-      { title: 'Device purchases', headers: ['Category','Model','Variant','Item ID','Brand','Purchased units','Revenue'], rows: overview.devices.map(r => [r.itemCategory3 || r.itemCategory2 || r.itemCategory,r.itemName,r.itemVariant,r.itemId,r.itemBrand,r.itemsPurchased,r.itemRevenue]) }
+      { title: 'Voucher purchases', headers: ['Latest reported purchase date','Brand','Voucher','Denomination or variant','Item ID','Platform','Purchased units','Revenue'], rows: (overview.vouchers || []).map(r => [r.latestPurchaseDate,r.itemBrand,r.itemName,r.itemVariant || r.itemCategory3 || r.itemCategory2,r.itemId,r.platform,r.itemsPurchased,r.itemRevenue]) },
+      { title: 'Device purchases', headers: ['Latest reported purchase date','Category','Model','Variant','Item ID','Brand','Platform','Purchased units','Revenue'], rows: overview.devices.map(r => [r.latestPurchaseDate,r.itemCategory3 || r.itemCategory2 || r.itemCategory,r.itemName,r.itemVariant,r.itemId,r.itemBrand,r.platform,r.itemsPurchased,r.itemRevenue]) }
     ])
     if (view === 'journey' && journey) downloadCsv('ga4-url-journey', [
       { title: `Page summary: ${journey.page.url}`, headers: ['Page views','Users','Sessions','Events','Key events'], rows: [[journey.summary.screenPageViews,journey.summary.activeUsers,journey.summary.sessions,journey.summary.eventCount,journey.summary.keyEvents]] },
@@ -954,12 +1052,13 @@ function App() {
       { title: 'Vouchers', headers: ['Platform','Language','Source page or item list','Item name','Item ID','Brand','Category','Category 2','Category 3','Items viewed'], rows: (products.vouchers || []).map(r => [r.platform,r.language === 'app' ? '' : r.language,r.pageUrl || r.sourceName,r.itemName,r.itemId,r.itemBrand,r.itemCategory,r.itemCategory2,r.itemCategory3,r.itemsViewed]) }
     ])
     if (view === 'journey-monitoring' && journeyMonitoring) downloadCsv('ga4-journey-monitoring', [
-      { title: `Journey monitoring · ${journeyMonitoring.period.startDate} to ${journeyMonitoring.period.endDate}`, headers: ['Date and time','Affected page or screen','Page or screen title','Journey step','Issue','GA4 event','Plan or product','Item ID','Transaction reference','User details','Users affected','Events'], rows: journeyMonitoring.issues.map(r => [dateTimeLabel(r.dateHourMinute),r.pagePath || 'Page not reported',r.pageTitle || '',r.step,r.issue,r.eventName,r.itemName || '',r.itemId || '',r.transactionId || '','Not available in GA4',r.totalUsers,r.eventCount]) }
+      { title: `Journey monitoring · ${journeyMonitoring.period.startDate} to ${journeyMonitoring.period.endDate}`, headers: ['Date and time','Channel','Platform','Operating system','App version','Affected page or screen','Page or screen title','Journey step','Issue','GA4 event','Plan or product','Item ID','Transaction reference','User details','Users affected','Events'], rows: journeyMonitoring.issues.map(r => [dateTimeLabel(r.dateHourMinute),r.channel,r.platform || '',r.operatingSystem || '',r.channel === 'App' ? r.appVersion || 'Not reported' : 'Not applicable',r.pagePath || 'Page not reported',r.pageTitle || '',r.step,r.issue,r.eventName,r.itemName || '',r.itemId || '',r.transactionId || '','Not available in GA4',r.totalUsers,r.eventCount]) }
     ])
     if (view === 'funnels' && funnel) downloadCsv(`ga4-${funnelJourney}-funnel`, funnel.reports.flatMap(report => [
       { title: `${report.platform} funnel summary`, headers: ['Entered users','Strict completed users','Recorded purchase event','Recorded purchase events','Recorded purchase users','Did not complete','Strict completion rate','Failure events'], rows: [[report.summary.entrants,report.summary.completions,report.summary.recordedPurchaseEvent,report.summary.recordedPurchaseEvents,report.summary.recordedPurchaseUsers,report.summary.abandonedUsers,report.summary.completionRate,report.summary.failureEvents]] },
       { title: `${report.platform} ordered funnel`, headers: ['Step','Active users','Step completion rate','Abandonments','Abandonment rate'], rows: report.steps.map(row => [row.step,row.activeUsers,row.completionRate,row.abandonments,row.abandonmentRate]) },
-      { title: `${report.platform} complete event checklist`, headers: ['Event','Users','Events','Status'], rows: report.events.map(row => [row.eventName,row.totalUsers,row.eventCount,report.failures.some(failure => failure.eventName === row.eventName) ? 'Failure' : row.eventCount ? 'Tracked' : 'Not received']) }
+      { title: `${report.platform} complete event checklist`, headers: ['Event','Users','Events','Status'], rows: report.events.map(row => [row.eventName,row.totalUsers,row.eventCount,report.failures.some(failure => failure.eventName === row.eventName) ? 'Failure' : row.eventCount ? 'Tracked' : 'Not received']) },
+      { title: `${report.platform} eSIM QR and activation`, headers: ['Signal','Users','Events','Availability'], rows: [['eSIM activated',report.esim.activated.totalUsers,report.esim.activated.eventCount,'Tracked'],['eSIM activation failed',report.esim.activationFailed.totalUsers,report.esim.activationFailed.eventCount,'Tracked'],['QR generated or displayed',report.esim.qrGenerated.totalUsers,report.esim.qrGenerated.eventCount,report.esim.qrDeliveryInstrumented ? 'Tracked' : 'Not instrumented'],['QR not received or failed',report.esim.qrFailed.totalUsers,report.esim.qrFailed.eventCount,report.esim.qrDeliveryInstrumented ? 'Tracked' : 'Not available']] }
     ]))
     if (view === 'lifecycle' && lifecycle) downloadCsv('mystc-app-lifecycle', [
       { title: 'Summary', headers: ['Installs / first opens','Install users','Android uninstalls','Uninstall users','Net lifecycle events'], rows: [[lifecycle.summary.installs,lifecycle.summary.installUsers,lifecycle.summary.uninstalls,lifecycle.summary.uninstallUsers,lifecycle.summary.netInstalls]] },
@@ -1002,17 +1101,13 @@ function App() {
   const topEvents = data?.events?.slice(0, 8) || []
   const maxEvent = Math.max(1, ...topEvents.map(item => item.eventCount || 0))
   const selectedPeriodLabel = `${appliedFrom} to ${appliedTo}`
-  const selectedScopeLabel = scope === 'all' ? 'All platforms' : scope === 'web' ? 'Web only' : 'App only'
+  const selectedScopeLabel = appliedScope === 'all' ? 'All platforms' : appliedScope === 'web' ? 'Web only' : 'App only'
   const datesValid = Boolean(customFrom && customTo && customFrom <= customTo && customTo <= today)
 
   function applyDates() {
     if (!datesValid) return
-    setAppliedFrom(customFrom)
-    setAppliedTo(customTo)
-    if (customFrom === appliedFrom && customTo === appliedTo) {
-      loadData(true)
-      if (view === 'overview') request(`/main-overview?startDate=${customFrom}&endDate=${customTo}&scope=${scope}`).then(setOverview).catch(error => setError(error.message))
-    }
+    setAppliedFilters({ from: customFrom, to: customTo, scope })
+    setRefreshKey(value => value + 1)
   }
 
   const viewTitles = {
@@ -1037,24 +1132,24 @@ function App() {
   const show = dashboard => isSuperAdmin || allowed.includes(dashboard)
   async function logout() { await request('/auth/logout', { method:'POST' }); setAuth({ authenticated:false }); window.history.replaceState({}, '', '/') }
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><Activity size={22} /></div><div><strong>EventScope</strong><span>GA4 intelligence</span></div></div>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      <div className="sidebar-brand-row"><div className="brand"><div className="brand-mark"><Activity size={22} /></div><div><strong>EventScope</strong><span>GA4 intelligence</span></div></div><button className="sidebar-toggle" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? 'Show full menu' : 'Hide menu labels'} title={sidebarCollapsed ? 'Show full menu' : 'Hide menu labels'}>{sidebarCollapsed ? <PanelLeftOpen size={19}/> : <PanelLeftClose size={19}/>}</button></div>
       <nav className="side-nav" aria-label="Dashboard views">
         <p>Dashboards</p>
-        {show('overview') && <button className={view === 'overview' ? 'active' : ''} onClick={() => navigate('overview')}><BarChart3 size={18}/><span>Main overview</span></button>}
-        {show('journey') && <button className={view === 'journey' ? 'active' : ''} onClick={() => navigate('journey')}><Route size={18}/><span>URL journey analyzer</span></button>}
-        {show('plans-items') && <button className={view === 'plans-items' ? 'active' : ''} onClick={() => navigate('plans-items')}><ShoppingCart size={18}/><span>Plans &amp; items</span></button>}
-        {show('journey-monitoring') && <button className={view === 'journey-monitoring' ? 'active' : ''} onClick={() => navigate('journey-monitoring')}><Siren size={18}/><span>Journey Monitoring</span></button>}
-        {show('funnels') && <button className={view === 'funnels' ? 'active' : ''} onClick={() => navigate('funnels')}><Route size={18}/><span>Funnels</span></button>}
-        {show('lifecycle') && <button className={view === 'lifecycle' ? 'active' : ''} onClick={() => navigate('lifecycle')}><Smartphone size={18}/><span>mySTC app lifecycle</span></button>}
-        {show('adjust') && <button className={view === 'adjust' ? 'active' : ''} onClick={() => navigate('adjust')}><TrendingUp size={18}/><span>Adjust app installs</span></button>}
-        {show('comparison') && <button className={view === 'comparison' ? 'active' : ''} onClick={() => navigate('comparison')}><GitCompareArrows size={18}/><span>GA4 vs Adjust</span></button>}
-        {show('quality') && <button className={view === 'quality' ? 'active' : ''} onClick={() => navigate('quality')}><Bug size={18}/><span>Engagement & stability</span></button>}
-        {show('campaigns') && <button className={view === 'campaigns' ? 'active' : ''} onClick={() => navigate('campaigns')}><TrendingUp size={18}/><span>Campaigns &amp; UTM</span></button>}
-        {show('urls') && <button className={view === 'urls' ? 'active' : ''} onClick={() => navigate('urls')}><Link2 size={18}/><span>STC URL inventory</span></button>}
-        {show('assistant') && <button className={view === 'assistant' ? 'active' : ''} onClick={() => navigate('assistant')}><Bot size={18}/><span>AI analytics assistant</span></button>}
-        {isSuperAdmin && <button className={view === 'access-control' ? 'active' : ''} onClick={() => navigate('access-control')}><UserCog size={18}/><span>Access control</span></button>}
+        {show('overview') && <button title="Main overview" className={view === 'overview' ? 'active' : ''} onClick={() => navigateFromSidebar('overview')}><BarChart3 size={18}/><span>Main overview</span></button>}
+        {show('journey') && <button title="URL journey analyzer" className={view === 'journey' ? 'active' : ''} onClick={() => navigateFromSidebar('journey')}><Route size={18}/><span>URL journey analyzer</span></button>}
+        {show('plans-items') && <button title="Plans & items" className={view === 'plans-items' ? 'active' : ''} onClick={() => navigateFromSidebar('plans-items')}><ShoppingCart size={18}/><span>Plans &amp; items</span></button>}
+        {show('journey-monitoring') && <button title="Journey Monitoring" className={view === 'journey-monitoring' ? 'active' : ''} onClick={() => navigateFromSidebar('journey-monitoring')}><Siren size={18}/><span>Journey Monitoring</span></button>}
+        {show('funnels') && <button title="Funnels" className={view === 'funnels' ? 'active' : ''} onClick={() => navigateFromSidebar('funnels')}><Route size={18}/><span>Funnels</span></button>}
+        {show('lifecycle') && <button title="mySTC app lifecycle" className={view === 'lifecycle' ? 'active' : ''} onClick={() => navigateFromSidebar('lifecycle')}><Smartphone size={18}/><span>mySTC app lifecycle</span></button>}
+        {show('adjust') && <button title="Adjust app installs" className={view === 'adjust' ? 'active' : ''} onClick={() => navigateFromSidebar('adjust')}><TrendingUp size={18}/><span>Adjust app installs</span></button>}
+        {show('comparison') && <button title="GA4 vs Adjust" className={view === 'comparison' ? 'active' : ''} onClick={() => navigateFromSidebar('comparison')}><GitCompareArrows size={18}/><span>GA4 vs Adjust</span></button>}
+        {show('quality') && <button title="Engagement & stability" className={view === 'quality' ? 'active' : ''} onClick={() => navigateFromSidebar('quality')}><Bug size={18}/><span>Engagement & stability</span></button>}
+        {show('campaigns') && <button title="Campaigns & UTM" className={view === 'campaigns' ? 'active' : ''} onClick={() => navigateFromSidebar('campaigns')}><TrendingUp size={18}/><span>Campaigns &amp; UTM</span></button>}
+        {show('urls') && <button title="STC URL inventory" className={view === 'urls' ? 'active' : ''} onClick={() => navigateFromSidebar('urls')}><Link2 size={18}/><span>STC URL inventory</span></button>}
+        {show('assistant') && <button title="AI analytics assistant" className={view === 'assistant' ? 'active' : ''} onClick={() => navigateFromSidebar('assistant')}><Bot size={18}/><span>AI analytics assistant</span></button>}
+        {isSuperAdmin && <button title="Access control" className={view === 'access-control' ? 'active' : ''} onClick={() => navigateFromSidebar('access-control')}><UserCog size={18}/><span>Access control</span></button>}
       </nav>
       <div className="sidebar-bottom">
         <div className={`connection-pill ${status.connected ? 'online' : ''}`}><span />{status.connected ? 'GA4 connected' : 'GA4 not connected'}</div>

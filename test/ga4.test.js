@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyUrlHistory, combineDimensionFilters, funnelDefinitions, isPublicPagePath, journeyFailureEvents, mergeCrashTrend, mergeItemDetails, normalizePropertyId, normalizeScope, normalizeTrackedPage, parseSitemap, platformDimension, previousDateRange, productType, validateServiceAccount } from '../server/ga4.js'
+import { applyUrlHistory, combineDimensionFilters, funnelDefinitions, isPublicPagePath, journeyFailureEvents, mergeCrashTrend, mergeItemDetails, normalizePropertyId, normalizeScope, normalizeTrackedPage, overviewProductType, overviewPurchaseSegment, parseSitemap, platformDimension, previousDateRange, productType, validateServiceAccount } from '../server/ga4.js'
 
 test('normalizes numeric property identifiers', () => {
   assert.equal(normalizePropertyId(' properties/123456789 '), '123456789')
@@ -70,6 +70,8 @@ test('defines the requested postpaid and roaming funnels with web and app contex
   assert.ok(['prepaid', 'voucher', 'postpaid', 'youthPostpaid', 'postpaidInternet', 'vipPostpaid', 'roaming'].every(key => funnelDefinitions[key]))
   assert.deepEqual(funnelDefinitions.youthPostpaid.web.entry.values, ['/en/youth-postpaid-plans', '/ar/youth-postpaid-plans'])
   assert.ok(funnelDefinitions.postpaidInternet.app.entry.values.includes('Data - Postpaid Plans'))
+  assert.ok(funnelDefinitions.postpaid.app.monitored.includes('activated_esim_failed'))
+  assert.ok(funnelDefinitions.youthPostpaid.web.monitored.includes('esim_qr_failed'))
   assert.ok(funnelDefinitions.vipPostpaid.app.entry.values.includes('Tamayouz - Postpaid Plans GNL'))
   assert.ok(funnelDefinitions.roaming.app.steps.at(-1)[1].includes('purchase_roaming'))
   assert.ok(Object.keys(funnelDefinitions).length >= 60)
@@ -96,6 +98,18 @@ test('classifies product catalogue rows', () => {
   assert.equal(productType({ itemName: 'Roaming 10GB' }), 'Roaming plans')
   assert.equal(productType({ itemCategory3: 'BUNDLE' }), 'Bundles')
   assert.equal(productType({ itemCategory: 'POST', itemCategory3: 'PLAN' }), 'Plans')
+})
+
+test('classifies completed plan purchases by commercial journey', () => {
+  assert.equal(overviewPurchaseSegment({ itemCategory: 'PREP', itemName: 'go 6' }), 'Prepaid')
+  assert.equal(overviewPurchaseSegment({ itemCategory: 'POST', itemName: 'Youth plan' }), 'Youth postpaid')
+  assert.equal(overviewPurchaseSegment({ eventName: 'purchase_postpaid', itemName: '5G plan' }), 'Postpaid')
+  assert.equal(overviewPurchaseSegment({ itemName: 'Postpaid Internet 5G' }), 'Postpaid internet')
+})
+
+test('keeps Quick Pay recharge units out of completed plan purchases', () => {
+  assert.equal(overviewProductType({ eventName: 'purchase', itemName: 'Quick Pay', itemId: 'recharge_5KD', itemCategory: 'PREP' }), 'Recharges')
+  assert.equal(overviewProductType({ eventName: 'purchase', itemName: 'Quick Pay bill payment', itemCategory: 'POST' }), 'Recharges')
 })
 
 test('parses sitemap URLs and metadata', () => {

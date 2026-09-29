@@ -146,6 +146,7 @@ const funnelOrEvents = eventNames => ({ orGroup: { expressions: eventNames.map(f
 const funnelPlatform = platform => platform === 'web'
   ? funnelField('platform', 'web')
   : { orGroup: { expressions: [funnelField('platform', 'Android'), funnelField('platform', 'iOS')] } }
+const esimEvents = ['activated_esim', 'activated_esim_failed', 'esim_qr_generated', 'esim_qr_displayed', 'esim_qr_failed', 'qr_code_generated', 'qr_code_failed']
 
 const planFunnel = ({ name, path, appLists, purchaseEvent = 'purchase_postpaid', webEntryEvent = 'view_item_list' }) => ({
   name,
@@ -153,14 +154,14 @@ const planFunnel = ({ name, path, appLists, purchaseEvent = 'purchase_postpaid',
   description: `Closed, ordered GA4 funnels for the ${name} purchase journey.`,
   web: {
     steps: [['Viewed plans', [webEntryEvent]], ['Selected or viewed a plan', ['clicked_cta', 'select_item', 'view_item']], ['Completed purchase', ['purchase']]],
-    purchases: [], failures: ['failed_purchase'], outcomes: ['purchase', 'failed_purchase'],
-    monitored: ['view_item_list', 'select_item', 'view_item', 'add_to_cart', 'begin_checkout', 'add_payment_info', 'purchase', 'failed_purchase'],
+    purchases: [], failures: ['failed_purchase'], outcomes: ['purchase', 'failed_purchase', ...esimEvents],
+    monitored: ['view_item_list', 'select_item', 'view_item', 'add_to_cart', 'begin_checkout', 'add_payment_info', 'purchase', 'failed_purchase', ...esimEvents],
     entry: { type: 'exact', field: 'unifiedPagePathScreen', values: [`/en/${path}`, `/ar/${path}`] }
   },
   app: {
     steps: [['Viewed plans', ['view_item_list']], ['Selected or viewed a plan', ['select_item', 'view_item']], ['Completed purchase', ['purchase', purchaseEvent]]],
-    purchases: purchaseEvent === 'purchase_roaming' ? [purchaseEvent] : [], failures: ['failed_purchase'], outcomes: ['purchase', purchaseEvent, 'failed_purchase'],
-    monitored: ['view_item_list', 'select_item', 'view_item', 'add_to_cart', 'begin_checkout', 'add_payment_info', 'purchase', purchaseEvent, 'failed_purchase'],
+    purchases: purchaseEvent === 'purchase_roaming' ? [purchaseEvent] : [], failures: ['failed_purchase'], outcomes: ['purchase', purchaseEvent, 'failed_purchase', ...esimEvents],
+    monitored: ['view_item_list', 'select_item', 'view_item', 'add_to_cart', 'begin_checkout', 'add_payment_info', 'purchase', purchaseEvent, 'failed_purchase', ...esimEvents],
     entry: { type: 'exact', field: 'itemListName', values: appLists }
   },
   coverage: {
@@ -449,12 +450,26 @@ async function runFunnelPlatform(settings, startDate, endDate, journey, platform
   const purchaseRows = definition.purchases.map(eventName => byEvent.get(eventName)).filter(Boolean)
   const journeyPurchaseRows = purchaseRows.filter(row => row.eventName !== 'purchase' && row.eventCount)
   const recordedPurchase = (journeyPurchaseRows.length ? journeyPurchaseRows : purchaseRows).reduce((best, row) => row.eventCount > (best?.eventCount || 0) ? row : best, null)
+  const eventTotals = eventNames => eventNames.reduce((result, eventName) => ({
+    eventCount: result.eventCount + (byEvent.get(eventName)?.eventCount || 0),
+    totalUsers: result.totalUsers + (byEvent.get(eventName)?.totalUsers || 0)
+  }), { eventCount: 0, totalUsers: 0 })
+  const qrGenerated = eventTotals(['esim_qr_generated', 'esim_qr_displayed', 'qr_code_generated'])
+  const qrFailed = eventTotals(['esim_qr_failed', 'qr_code_failed'])
   return {
     platform,
     steps,
     failures,
     events: definition.monitored.map(eventName => ({ eventName, eventCount: byEvent.get(eventName)?.eventCount || 0, totalUsers: byEvent.get(eventName)?.totalUsers || 0 })),
     outcomes: definition.outcomes.map(eventName => ({ eventName, eventCount: byEvent.get(eventName)?.eventCount || 0, totalUsers: byEvent.get(eventName)?.totalUsers || 0 })),
+    esim: {
+      activated: eventTotals(['activated_esim']),
+      activationFailed: eventTotals(['activated_esim_failed']),
+      qrGenerated,
+      qrFailed,
+      qrDeliveryInstrumented: qrGenerated.eventCount > 0 || qrFailed.eventCount > 0,
+      signals: esimEvents.map(eventName => ({ eventName, eventCount: byEvent.get(eventName)?.eventCount || 0, totalUsers: byEvent.get(eventName)?.totalUsers || 0 }))
+    },
     summary: {
       entrants,
       completions,
@@ -489,6 +504,7 @@ export async function funnelDashboard(settings, startDate = '28daysAgo', endDate
     eyebrow: selected.eyebrow,
     description: selected.description,
     outcomeLabel: selected.outcomeLabel || 'Recorded purchases',
+    esimRelevant: ['prepaid', 'postpaid', 'youthPostpaid', 'postpaidInternet', 'vipPostpaid'].includes(journey),
     availableJourneys: Object.entries(funnelDefinitions).map(([value, definition]) => ({ value, label: definition.name })),
     reports,
     coverage: {
@@ -1042,14 +1058,16 @@ export async function journeyMonitoringDashboard(settings, startDate = '28daysAg
     orderBys: [{ desc: true, metric: { metricName: 'totalUsers' } }], limit: 1000
   }), query(settings, 'runReport', {
     ...common,
-    dimensions: ['dateHourMinute', 'eventName', 'unifiedPagePathScreen', 'unifiedScreenName', 'transactionId'].map(name => ({ name })),
+    dimensions: ['dateHourMinute', 'platform', 'operatingSystem', 'appVersion', 'eventName', 'unifiedPagePathScreen', 'unifiedScreenName', 'transactionId'].map(name => ({ name })),
     metrics: ['eventCount', 'totalUsers'].map(name => ({ name })),
     orderBys: [{ desc: true, dimension: { dimensionName: 'dateHourMinute' } }], limit: 10000
   })])
   const normalize = value => value && value !== '(not set)' ? value : null
   const issues = rows(detailReport).map(row => {
     const [step, issue] = journeyFailureDetails[row.eventName] || ['Journey', row.eventName]
-    return { ...row, step, issue, pagePath: normalize(row.unifiedPagePathScreen), pageTitle: normalize(row.unifiedScreenName), transactionId: normalize(row.transactionId), itemName: normalize(row.itemName), itemId: normalize(row.itemId) }
+    const platform = normalize(row.platform)
+    const isApp = ['android', 'ios'].includes(String(platform || '').toLowerCase())
+    return { ...row, platform, operatingSystem: normalize(row.operatingSystem), appVersion: isApp ? normalize(row.appVersion) : null, channel: isApp ? 'App' : 'Web', step, issue, pagePath: normalize(row.unifiedPagePathScreen), pageTitle: normalize(row.unifiedScreenName), transactionId: normalize(row.transactionId), itemName: normalize(row.itemName), itemId: normalize(row.itemId) }
   })
   const summaryRows = rows(summaryReport)
   return {
@@ -1060,12 +1078,12 @@ export async function journeyMonitoringDashboard(settings, startDate = '28daysAg
       failureEvents: summaryRows.reduce((sum, row) => sum + (row.eventCount || 0), 0),
       failedPayments: summaryRows.filter(row => ['purchase_failed', 'failed_purchase', 'cancelled_purchase', 'failed_added_card', 'spend_points_failed'].includes(row.eventName)).reduce((sum, row) => sum + (row.eventCount || 0), 0)
     },
-    coverage: { timestamp: 'Minute-level aggregate in the GA4 property timezone.', userDetails: 'Personal user details are not available from the GA4 Data API and must not be sent to Google Analytics.', commerce: 'Transaction references appear when transaction_id is collected. Plan and product details require a compatible registered event dimension or BigQuery event export.' }
+    coverage: { timestamp: 'Minute-level aggregate in the GA4 property timezone.', platform: 'Platform and app version are reported by GA4. Web events do not have an app version; app rows show Not reported when the SDK did not send one.', userDetails: 'Personal user details are not available from the GA4 Data API and must not be sent to Google Analytics.', commerce: 'Transaction references appear when transaction_id is collected. Plan and product details require a compatible registered event dimension or BigQuery event export.' }
   }
 }
 
 const overviewPurchaseEvents = ['purchase', 'purchase_prepaid', 'purchase_prepaid_bundle', 'purchase_postpaid', 'purchase_addon', 'purchase_roaming', 'purchased_voucher', 'purchased_device', 'purchase_vas']
-const expectedPurchaseTypes = ['Plans', 'Bundles', 'Vouchers', 'Boosters', 'Add-ons', 'Roaming plans', 'Roaming bundles', 'Devices', 'Qitaf']
+const expectedPurchaseTypes = ['Plans', 'Bundles', 'Vouchers', 'Boosters', 'Add-ons', 'Roaming plans', 'Roaming bundles', 'Devices', 'Recharges', 'Qitaf']
 
 function overviewJourney(pagePath = '', eventName = '') {
   const text = `${pagePath} ${eventName}`.toLowerCase()
@@ -1081,7 +1099,8 @@ function overviewJourney(pagePath = '', eventName = '') {
 }
 
 function overviewProductType(row) {
-  const text = [row.eventName, row.itemName, row.itemCategory, row.itemCategory2, row.itemCategory3].filter(Boolean).join(' ').toLowerCase()
+  const text = [row.eventName, row.itemName, row.itemId, row.itemCategory, row.itemCategory2, row.itemCategory3].filter(Boolean).join(' ').toLowerCase()
+  if (text.includes('recharge') || text.includes('quick pay') || text.includes('bill payment')) return 'Recharges'
   if (text.includes('voucher')) return 'Vouchers'
   if (text.includes('booster')) return 'Boosters'
   if (text.includes('addon') || text.includes('add-on') || text.includes('vas')) return 'Add-ons'
@@ -1092,12 +1111,24 @@ function overviewProductType(row) {
   return 'Plans'
 }
 
+function overviewPurchaseSegment(row) {
+  const text = [row.eventName, row.itemName, row.itemId, row.itemVariant, row.itemCategory, row.itemCategory2, row.itemCategory3]
+    .filter(Boolean).join(' ').toLowerCase()
+  if (text.includes('youth')) return 'Youth postpaid'
+  if (text.includes('vip')) return 'VIP postpaid'
+  if (text.includes('postpaid internet') || text.includes('postpaid-internet') || text.includes('data sim')) return 'Postpaid internet'
+  if (text.includes('postpaid') || /(^|\s)post(\s|$)/.test(text)) return 'Postpaid'
+  if (text.includes('prepaid') || /(^|\s)prep(\s|$)/.test(text) || text.includes('gnl')) return 'Prepaid'
+  if (text.includes('roaming')) return 'Roaming'
+  return 'Other'
+}
+
 export async function mainOverviewDashboard(settings, startDate = '28daysAgo', endDate = 'today', scope = 'all') {
   const common = { dateRanges: dateRange(startDate, endDate), keepEmptyRows: false, _scope: scope }
   const requests = await Promise.allSettled([
     query(settings, 'runReport', {
       ...common,
-      dimensions: ['dateHourMinute', 'eventName', 'unifiedPagePathScreen', 'unifiedScreenName'].map(name => ({ name })),
+      dimensions: ['dateHourMinute', 'platform', 'operatingSystem', 'appVersion', 'eventName', 'unifiedPagePathScreen', 'unifiedScreenName'].map(name => ({ name })),
       metrics: ['eventCount', 'totalUsers'].map(name => ({ name })),
       dimensionFilter: inListDimension('eventName', journeyFailureEvents),
       orderBys: [{ desc: true, dimension: { dimensionName: 'dateHourMinute' } }], limit: 500
@@ -1109,14 +1140,14 @@ export async function mainOverviewDashboard(settings, startDate = '28daysAgo', e
     }),
     query(settings, 'runReport', {
       ...common,
-      dimensions: ['eventName', 'itemName', 'itemId', 'itemBrand', 'itemVariant', 'itemCategory', 'itemCategory2', 'itemCategory3'].map(name => ({ name })),
+      dimensions: ['platform', 'eventName', 'itemName', 'itemId', 'itemBrand', 'itemVariant', 'itemCategory', 'itemCategory2', 'itemCategory3'].map(name => ({ name })),
       metrics: ['itemsPurchased', 'itemRevenue'].map(name => ({ name })),
       dimensionFilter: inListDimension('eventName', overviewPurchaseEvents),
       orderBys: [{ desc: true, metric: { metricName: 'itemsPurchased' } }], limit: 5000
     }),
     query(settings, 'runReport', {
       ...common,
-      dimensions: ['eventName', 'itemName', 'itemId', 'itemBrand', 'itemVariant', 'itemCategory', 'itemCategory2', 'itemCategory3'].map(name => ({ name })),
+      dimensions: ['platform', 'eventName', 'itemName', 'itemId', 'itemBrand', 'itemVariant', 'itemCategory', 'itemCategory2', 'itemCategory3'].map(name => ({ name })),
       metrics: ['itemsPurchased', 'itemRevenue'].map(name => ({ name })),
       dimensionFilter: inListDimension('eventName', overviewPurchaseEvents),
       orderBys: [{ desc: false, metric: { metricName: 'itemsPurchased' } }], limit: 5000
@@ -1157,23 +1188,95 @@ export async function mainOverviewDashboard(settings, startDate = '28daysAgo', e
       metrics: ['eventCount', 'totalUsers'].map(name => ({ name })),
       dimensionFilter: inListDimension('eventName', ['joined_qitaf', 'earned_points', 'spend_points_activated']),
       orderBys: [{ desc: true, metric: { metricName: 'eventCount' } }], limit: 20
+    }),
+    query(settings, 'runReport', {
+      ...common,
+      dimensions: ['date', 'platform', 'eventName', 'itemName', 'itemId'].map(name => ({ name })),
+      metrics: [{ name: 'itemsPurchased' }],
+      dimensionFilter: inListDimension('eventName', overviewPurchaseEvents),
+      orderBys: [{ desc: true, dimension: { dimensionName: 'date' } }], limit: 10000
+    }),
+    query(settings, 'runReport', {
+      ...common, dimensions: ['date', 'platform', 'operatingSystem', 'eventName'].map(name => ({ name })),
+      metrics: ['eventCount'].map(name => ({ name })),
+      dimensionFilter: inListDimension('eventName', ['first_open', 'app_remove']),
+      orderBys: [{ desc: false, dimension: { dimensionName: 'date' } }], limit: 10000
+    }),
+    scope === 'web' ? Promise.resolve({}) : query(settings, 'runReport', {
+      dateRanges: dateRange(startDate, endDate), keepEmptyRows: false, _scope: 'app',
+      dimensions: ['itemListName', 'itemName', 'itemId', 'itemCategory'].map(name => ({ name })),
+      metrics: [{ name: 'itemsViewed' }],
+      orderBys: [{ desc: true, metric: { metricName: 'itemsViewed' } }], limit: 100000
+    }),
+    query(settings, 'runReport', {
+      ...common,
+      dimensions: ['platform', 'eventName', 'itemName', 'itemId', 'customItem:plan_id'].map(name => ({ name })),
+      metrics: [{ name: 'itemsPurchased' }],
+      dimensionFilter: inListDimension('eventName', overviewPurchaseEvents),
+      orderBys: [{ desc: true, metric: { metricName: 'itemsPurchased' } }], limit: 10000
     })
   ])
   const reportRows = index => requests[index].status === 'fulfilled' ? rows(requests[index].value) : []
   const unavailable = (index, label) => requests[index].status === 'rejected' ? `${label}: ${requests[index].reason.message}` : null
   const failures = reportRows(0).map(row => {
     const [step, issue] = journeyFailureDetails[row.eventName] || ['Journey', row.eventName]
-    return { ...row, journey: overviewJourney(row.unifiedPagePathScreen, row.eventName), step, issue, pagePath: row.unifiedPagePathScreen && row.unifiedPagePathScreen !== '(not set)' ? row.unifiedPagePathScreen : null }
+    const platform = row.platform && row.platform !== '(not set)' ? row.platform : null
+    const operatingSystem = row.operatingSystem && row.operatingSystem !== '(not set)' ? row.operatingSystem : null
+    const isApp = ['android', 'ios'].includes(String(platform || '').toLowerCase())
+    return { ...row, platform, operatingSystem, channel: isApp ? 'App' : 'Web', appVersion: isApp && row.appVersion !== '(not set)' ? row.appVersion : null, journey: overviewJourney(row.unifiedPagePathScreen, row.eventName), step, issue, pagePath: row.unifiedPagePathScreen && row.unifiedPagePathScreen !== '(not set)' ? row.unifiedPagePathScreen : null }
   })
   const purchaseEvents = reportRows(1)
-  const rawPurchasedItems = [...reportRows(2), ...reportRows(3)].map(row => ({ ...row, productType: overviewProductType(row), journey: overviewJourney('', row.eventName) }))
+  const prepaidCompletion = purchaseEvents.find(row => row.eventName === 'purchase_prepaid') || { eventName: 'purchase_prepaid', eventCount: 0, totalUsers: 0 }
+  const appCatalogSegments = new Map()
+  for (const row of reportRows(13)) {
+    if (!row.itemId || row.itemId === '(not set)') continue
+    const text = [row.itemListName, row.itemName, row.itemCategory].filter(Boolean).join(' ').toLowerCase()
+    const segments = appCatalogSegments.get(row.itemId) || new Set()
+    if (text.includes('prep') || text.includes('prepaid')) segments.add('Prepaid')
+    if (text.includes('post') || text.includes('postpaid')) segments.add('Postpaid')
+    appCatalogSegments.set(row.itemId, segments)
+  }
+  const purchasePlanIds = new Map()
+  for (const row of reportRows(14)) {
+    const planId = row['customItem:plan_id'] && row['customItem:plan_id'] !== '(not set)' ? row['customItem:plan_id'] : null
+    if (!planId) continue
+    purchasePlanIds.set([row.platform, row.eventName, row.itemName, row.itemId].join('\u0000'), planId)
+  }
+  const rawPurchasedItems = [...reportRows(2), ...reportRows(3)].map(row => {
+    let purchaseSegment = overviewPurchaseSegment(row)
+    const catalogSegments = appCatalogSegments.get(row.itemId)
+    if (purchaseSegment === 'Other' && ['Android', 'iOS'].includes(row.platform) && catalogSegments?.size === 1) purchaseSegment = [...catalogSegments][0]
+    const reportedPlanId = purchasePlanIds.get([row.platform, row.eventName, row.itemName, row.itemId].join('\u0000')) || null
+    return { ...row, planId: reportedPlanId, productType: overviewProductType(row), purchaseSegment, journey: overviewJourney('', row.eventName) }
+  })
+  const planNamesById = new Map()
+  for (const row of rawPurchasedItems) {
+    const categoryText = [row.itemCategory, row.itemCategory2, row.itemCategory3].filter(Boolean).join(' ').toLowerCase()
+    const isPlanItem = /plan|bundle|voice|data/.test(categoryText) && !/sim/.test(categoryText)
+    if (isPlanItem && row.itemId && row.itemId !== '(not set)' && row.itemName && row.itemName !== '(not set)') planNamesById.set(row.itemId, row.itemName)
+  }
+  for (const row of rawPurchasedItems) {
+    const categoryText = [row.itemCategory, row.itemCategory2, row.itemCategory3].filter(Boolean).join(' ').toLowerCase()
+    const isPlanItem = /plan|bundle|voice|data/.test(categoryText) && !/sim/.test(categoryText)
+    row.offerId = row.planId || (isPlanItem && row.itemId !== '(not set)' ? row.itemId : null)
+    row.planName = (row.planId && planNamesById.get(row.planId)) || (isPlanItem && row.itemName !== '(not set)' ? row.itemName : null)
+  }
   const purchasedItemMap = new Map()
   for (const row of rawPurchasedItems) {
-    const key = [row.productType, row.itemName, row.itemVariant, row.itemId, row.itemBrand, row.itemCategory, row.itemCategory2, row.itemCategory3].join('\u0000')
+    const key = [row.productType, row.platform, row.itemName, row.itemVariant, row.itemId, row.itemBrand, row.itemCategory, row.itemCategory2, row.itemCategory3, row.planId, row.planName, row.offerId].join('\u0000')
     const current = purchasedItemMap.get(key) || { ...row, itemsPurchased: 0, itemRevenue: 0 }
     current.itemsPurchased += row.itemsPurchased || 0
     current.itemRevenue += row.itemRevenue || 0
     purchasedItemMap.set(key, current)
+  }
+  const latestPurchaseDates = new Map()
+  for (const row of reportRows(11)) {
+    const key = [row.platform, row.itemName, row.itemId].join('\u0000')
+    if (!latestPurchaseDates.has(key) || row.date > latestPurchaseDates.get(key)) latestPurchaseDates.set(key, row.date)
+  }
+  for (const row of purchasedItemMap.values()) {
+    const key = [row.platform, row.itemName, row.itemId].join('\u0000')
+    row.latestPurchaseDate = latestPurchaseDates.get(key) || null
   }
   const qitafLabels = { joined_qitaf: 'Joined Qitaf', earned_points: 'Earned Qitaf points', spend_points_activated: 'Spent Qitaf points' }
   const qitafItems = reportRows(10).map(row => ({ ...row, productType: 'Qitaf', journey: 'Qitaf', itemName: qitafLabels[row.eventName] || row.eventName, itemId: row.eventName, itemBrand: 'Qitaf', itemCategory: 'Loyalty', itemVariant: null, itemsPurchased: row.eventCount || 0, itemRevenue: 0 }))
@@ -1181,6 +1284,11 @@ export async function mainOverviewDashboard(settings, startDate = '28daysAgo', e
   const purchaseTypeRows = purchasedItems.length ? purchasedItems : purchaseEvents.map(row => ({ ...row, itemsPurchased: row.eventCount, productType: overviewProductType(row) }))
   const purchaseTypes = purchaseTypeRows
     .reduce((map, row) => map.set(row.productType, (map.get(row.productType) || 0) + (row.itemsPurchased || 0)), new Map())
+  const completedPlanItems = purchasedItems
+    .filter(row => row.productType === 'Plans' && row.itemsPurchased > 0)
+    .sort((a, b) => (b.itemsPurchased || 0) - (a.itemsPurchased || 0))
+  const segmentCounts = completedPlanItems.reduce((map, row) => map.set(row.purchaseSegment, (map.get(row.purchaseSegment) || 0) + row.itemsPurchased), new Map())
+  const rechargeCounts = purchasedItems.filter(row => row.productType === 'Recharges').reduce((map, row) => map.set(row.purchaseSegment, (map.get(row.purchaseSegment) || 0) + (row.itemsPurchased || 0)), new Map())
   const lifecycle = reportRows(4)
   const lifecycleCount = (os, eventName) => lifecycle.filter(row => row.eventName === eventName && (!os || `${row.operatingSystem} ${row.platform}`.toLowerCase().includes(os))).reduce((sum, row) => sum + (row.eventCount || 0), 0)
   const lifecycleUsers = (os, eventName) => lifecycle.filter(row => row.eventName === eventName && (!os || `${row.operatingSystem} ${row.platform}`.toLowerCase().includes(os))).reduce((sum, row) => sum + (row.totalUsers || 0), 0)
@@ -1195,10 +1303,18 @@ export async function mainOverviewDashboard(settings, startDate = '28daysAgo', e
     purchases: expectedPurchaseTypes.map(productType => ({ productType, count: purchaseTypes.get(productType) || 0 })),
     purchaseEvents,
     salesItems: purchasedItems,
+    completedPlanPurchases: {
+      segments: ['Prepaid', 'Postpaid', 'Youth postpaid', 'Postpaid internet', 'VIP postpaid', 'Roaming', 'Other'].map(segment => ({ segment, count: segmentCounts.get(segment) || 0 })),
+      products: completedPlanItems,
+      strictPrepaid: { eventName: prepaidCompletion.eventName, completions: prepaidCompletion.eventCount || 0, users: prepaidCompletion.totalUsers || 0 }
+    },
+    rechargePurchases: ['Prepaid', 'Postpaid', 'Other'].map(segment => ({ segment, count: rechargeCounts.get(segment) || 0 })),
     devices: purchasedItems.filter(row => row.productType === 'Devices').sort((a, b) => (b.itemsPurchased || 0) - (a.itemsPurchased || 0)),
+    vouchers: purchasedItems.filter(row => row.productType === 'Vouchers').sort((a, b) => (b.itemsPurchased || 0) - (a.itemsPurchased || 0)),
     appActivity: {
       android: { installs: lifecycleCount('android', 'first_open'), installUsers: lifecycleUsers('android', 'first_open'), uninstalls: lifecycleCount('android', 'app_remove'), uninstallUsers: lifecycleUsers('android', 'app_remove') },
-      ios: { installs: lifecycleCount('ios', 'first_open'), installUsers: lifecycleUsers('ios', 'first_open'), uninstalls: lifecycleCount('ios', 'app_remove'), uninstallUsers: lifecycleUsers('ios', 'app_remove') }
+      ios: { installs: lifecycleCount('ios', 'first_open'), installUsers: lifecycleUsers('ios', 'first_open'), uninstalls: lifecycleCount('ios', 'app_remove'), uninstallUsers: lifecycleUsers('ios', 'app_remove') },
+      trend: reportRows(12)
     },
     engagement: reportRows(5).filter(row => row.pagePath && !['(not set)', '(other)'].includes(row.pagePath)).map(row => ({ ...row, journey: overviewJourney(row.pagePath) })),
     customers: { locations: reportRows(6), ages: reportRows(7), nationality: [] },
@@ -1210,7 +1326,7 @@ export async function mainOverviewDashboard(settings, startDate = '28daysAgo', e
       failures: unavailable(0, 'Failure detail'), purchases: unavailable(1, 'Purchase events'), devices: rawPurchasedItems.length ? null : (unavailable(2, 'Top purchased-item detail') || unavailable(3, 'Low purchased-item detail')),
       appActivity: unavailable(4, 'App lifecycle'), engagement: unavailable(5, 'Engagement'), locations: unavailable(6, 'Country and region'), ages: unavailable(7, 'Age group'),
       siteSearch: unavailable(8, 'On-site search terms'), paidSearch: unavailable(9, 'Paid campaign terms'),
-      qitaf: unavailable(10, 'Qitaf completion events'),
+      qitaf: unavailable(10, 'Qitaf completion events'), recentPurchases: unavailable(11, 'Recent purchased-item detail'), appActivityTrend: unavailable(12, 'App activity trend'), appPlanClassification: unavailable(13, 'App plan catalogue classification'), purchasePlanIds: unavailable(14, 'Purchase plan and offer identifiers'),
       googleOrganicSearch: 'Google organic search queries require the Google Search Console Search Analytics API. GA4 does not expose organic query text.',
       nationality: 'Nationality is not a standard GA4 dimension. It will remain unavailable unless collected as a consented, registered custom dimension.'
     }
@@ -1253,4 +1369,4 @@ export async function campaignMonitoringDashboard(settings, startDate = '28daysA
   }
 }
 
-export { applyUrlHistory, combineDimensionFilters, funnelDefinitions, isPublicPagePath, journeyFailureEvents, mergeCrashTrend, mergeItemDetails, normalizePropertyId, normalizeScope, normalizeTrackedPage, parseSitemap, platformDimension, previousDateRange, productType, validateServiceAccount }
+export { applyUrlHistory, combineDimensionFilters, funnelDefinitions, isPublicPagePath, journeyFailureEvents, mergeCrashTrend, mergeItemDetails, normalizePropertyId, normalizeScope, normalizeTrackedPage, overviewProductType, overviewPurchaseSegment, parseSitemap, platformDimension, previousDateRange, productType, validateServiceAccount }
