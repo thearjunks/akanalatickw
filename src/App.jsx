@@ -3,7 +3,7 @@ import {
   Activity, AlertTriangle, BarChart3, Bot, Bug, CheckCircle2, Clock3, Download, GitCompareArrows,
   Eye, Globe2, Languages, Link2, MousePointer2, Radio, RefreshCw, Route, Search, Siren,
   Send, Settings2, ShieldCheck, ShoppingCart, Smartphone, TrendingUp, UserMinus, Users, X, XCircle, LogOut, LockKeyhole, UserCog,
-  PanelLeftClose, PanelLeftOpen
+  PanelLeftClose, PanelLeftOpen, MessageCircle, Minus, Maximize2, Minimize2
 } from 'lucide-react'
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart,
@@ -18,9 +18,9 @@ const palette = ['#24d17e', '#6ee7b7', '#38bdf8', '#a78bfa', '#fbbf24', '#fb7185
 const dashboardPaths = {
   overview: '/', journey: '/url-journey', 'plans-items': '/plans-items', 'journey-monitoring': '/journey-monitoring',
   funnels: '/funnels', lifecycle: '/app-lifecycle', adjust: '/adjust', comparison: '/ga4-vs-adjust',
-  quality: '/engagement-stability', campaigns: '/campaigns', urls: '/url-inventory', assistant: '/assistant', 'access-control': '/access-control'
+  quality: '/engagement-stability', campaigns: '/campaigns', urls: '/url-inventory', playstore: '/app-stores', assistant: '/assistant', settings: '/settings', 'access-control': '/access-control'
 }
-const viewFromPath = pathname => Object.entries(dashboardPaths).find(([, path]) => path === (pathname.replace(/\/+$/, '') || '/'))?.[0] || 'overview'
+const viewFromPath = pathname => pathname.replace(/\/+$/, '') === '/playstore' ? 'playstore' : Object.entries(dashboardPaths).find(([, path]) => path === (pathname.replace(/\/+$/, '') || '/'))?.[0] || 'overview'
 
 async function request(path, options) {
   const response = await fetch(`${API}${path}`, options)
@@ -31,6 +31,37 @@ async function request(path, options) {
 
 function number(value) {
   return new Intl.NumberFormat('en', { notation: value >= 100000 ? 'compact' : 'standard', maximumFractionDigits: 0 }).format(value || 0)
+}
+
+function varianceForUi(compared, baseline) { return baseline ? (compared - baseline) / baseline : null }
+
+function akGreeting(displayName) {
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuwait', hour: '2-digit', hour12: false }).format(new Date()))
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const name = String(displayName || 'there').trim().split(/\s+/)[0]
+  return `${greeting}, ${name}! I’m AK, your analytics assistant. How can I help you today?`
+}
+
+function kuwaitToday() {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuwait', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+  const value = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]))
+  return `${value.year}-${value.month}-${value.day}`
+}
+
+async function answerAkQuestion(question, context) {
+  const q = question.toLowerCase()
+  if (/\btoday\b/.test(q) && /adjust/.test(q) && /install|first[ -]?open|download/.test(q)) {
+    const date = kuwaitToday()
+    const report = await request(`/adjust-installs?startDate=${date}&endDate=${date}&scope=app`)
+    const byOs = new Map()
+    for (const row of report.platforms || []) {
+      const os = String(row.os_name || 'Not reported').toLowerCase()
+      byOs.set(os, (byOs.get(os) || 0) + Number(row.installs || 0))
+    }
+    const breakdown = [...byOs.entries()].filter(([,value]) => value).map(([os,value]) => `${os === 'ios' ? 'iOS' : os === 'android' ? 'Android' : os}: ${number(value)}`).join(', ')
+    return `For today in Kuwait (${date}), Adjust reports ${number(report.summary?.installs)} attributed app installs${breakdown ? ` — ${breakdown}` : ''}. Today is still in progress, so this value can increase as Adjust processes additional attribution data.`
+  }
+  return answerAnalyticsQuestion(question, context)
 }
 
 function dateLabel(value) {
@@ -45,6 +76,10 @@ function dateTimeLabel(value) {
 
 function percent(value) {
   return new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 1 }).format(value || 0)
+}
+
+function precisePercent(value) {
+  return value == null ? '—' : new Intl.NumberFormat('en', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(value)
 }
 
 function parseUtmUrl(rawUrl) {
@@ -65,8 +100,8 @@ function Metric({ icon: Icon, label, value, detail, tone = 'green' }) {
 
 const dashboardLabels = {
   overview: 'Main overview', journey: 'URL journey analyzer', 'plans-items': 'Plans & items', 'journey-monitoring': 'Journey Monitoring',
-  funnels: 'Funnels', lifecycle: 'mySTC app lifecycle', adjust: 'Adjust app installs', comparison: 'GA4 vs Adjust', quality: 'Engagement & stability',
-  campaigns: 'Campaigns & UTM', urls: 'STC URL inventory', assistant: 'AI analytics assistant'
+  funnels: 'Funnels', lifecycle: 'GA4 app lifecycle', adjust: 'Adjust analytics', comparison: 'GA4 vs Adjust', quality: 'Engagement & stability',
+  campaigns: 'Campaigns & UTM', urls: 'STC URL inventory', playstore: 'App Stores', assistant: 'Ask AK'
 }
 
 function LoginScreen({ onLogin }) {
@@ -378,10 +413,10 @@ function LifecycleBreakdown({ rows, groupField }) {
 }
 
 function AppLifecycleView({ data }) {
-  if (!data) return <Panel title="mySTC app lifecycle" subtitle="Loading lifecycle events"><EmptyPanel title="Loading app activity" copy="Querying install and uninstall signals from GA4." /></Panel>
+  if (!data) return <Panel title="GA4 app lifecycle" subtitle="Loading lifecycle events"><EmptyPanel title="Loading app activity" copy="Querying install and uninstall signals from GA4." /></Panel>
   return <>
     <section className="lifecycle-hero">
-      <div><p className="eyebrow">Mobile app analytics</p><h2>mySTC app lifecycle</h2><p>Installation activity uses <code>first_open</code>. Uninstall activity uses Android <code>app_remove</code>. Store downloads require App Store Connect or Google Play Console data.</p></div>
+      <div><p className="eyebrow">GA4 mobile app analytics</p><h2>GA4 app lifecycle</h2><p>Installation activity uses <code>first_open</code>. Uninstall activity uses Android <code>app_remove</code>. Store downloads require App Store Connect or Google Play Console data.</p></div>
       <Smartphone size={42}/>
     </section>
     <section className="metric-grid">
@@ -495,71 +530,176 @@ function UrlInventoryView({ data }) {
   </>
 }
 
-function AdjustInstallsView({ data, connected }) {
-  if (!connected) return <Panel title="Adjust app installs" subtitle="Adjust connection required"><EmptyPanel title="Adjust is not connected" copy="Connect an Adjust API token to load attributed install reporting." /></Panel>
-  if (!data) return <Panel title="Adjust app installs" subtitle="Loading Adjust reporting"><EmptyPanel title="Loading install data" copy="Querying Adjust Report Service for the selected date range." /></Panel>
+function AdjustEventCoverage({ comparison, title = 'Adjust app and web event coverage' }) {
+  const scopeNote = comparison.eventCoverageAvailable ? comparison.webCoverageStatus : `Event coverage unavailable${comparison.eventCoverageError ? `: ${comparison.eventCoverageError}` : '.'}`
+  return <Panel className="version-panel" title={title} subtitle="Available Adjust commerce and customer events, split between mobile app and web">
+    <div className="metric-grid embedded-metrics">
+      <Metric icon={Smartphone} label="App custom events" value={comparison.eventTotals.app} detail={`${number(comparison.activityByGroup.app.sessions)} app sessions`} />
+      <Metric icon={Globe2} label="Web custom events" value={comparison.eventTotals.web} detail={`${number(comparison.activityByGroup.web.sessions)} web sessions`} tone="blue" />
+      <Metric icon={TrendingUp} label="App attributed installs" value={comparison.activityByGroup.app.installs} detail="Android and iOS" tone="purple" />
+      <Metric icon={Activity} label="Web attributed conversions" value={comparison.activityByGroup.web.installs} detail="Adjust web install metric" tone="amber" />
+    </div>
+    {comparison.eventCoverageAvailable && comparison.eventCoverage.length ? <div className="table-wrap"><table><thead><tr><th>Adjust event</th><th>App events</th><th>Web events</th><th>Web status</th></tr></thead><tbody>{comparison.eventCoverage.map(row => <tr key={row.metric}><td><strong>{row.label}</strong><small>{row.metric}</small></td><td>{number(row.app)}</td><td>{number(row.web)}</td><td>{row.web > 0 ? 'Reported' : 'No events returned'}</td></tr>)}</tbody></table></div> : <EmptyPanel title="Custom event coverage unavailable" copy="Adjust did not return the custom-event report. Installs, sessions and attribution remain available." />}
+    <div className="coverage-note"><ShieldCheck size={17}/><div><strong>Web tracking check</strong><span>{scopeNote} Adjust's web “install” value is a web attribution/conversion metric; it is not a mobile app installation.</span></div></div>
+  </Panel>
+}
+
+function AdjustAnalyticsView({ data, connected }) {
+  if (!connected) return <Panel title="Adjust analytics" subtitle="Adjust connection required"><EmptyPanel title="Adjust is not connected" copy="Connect an Adjust API token to load attribution, activity and event reporting." /></Panel>
+  if (!data) return <Panel title="Adjust analytics" subtitle="Loading Adjust reporting"><EmptyPanel title="Loading Adjust data" copy="Querying Adjust Report Service for the selected date range." /></Panel>
+  const comparison = buildComparison({}, data)
+  const networks = [...data.acquisition.reduce((map, row) => {
+    const name = row.network || 'Not reported'
+    const current = map.get(name) || { network: name, installs: 0, sessions: 0, clicks: 0, impressions: 0, uninstalls: 0 }
+    for (const metric of ['installs', 'sessions', 'clicks', 'impressions', 'uninstalls']) current[metric] += Number(row[metric] || 0)
+    map.set(name, current)
+    return map
+  }, new Map()).values()].sort((a, b) => b.installs - a.installs).slice(0, 10)
   return <>
-    <section className="lifecycle-hero"><div><p className="eyebrow">Adjust Datascape</p><h2>Attributed app installs</h2><p>Install performance from Adjust Report Service, separated by app, operating system, network and campaign.</p></div><TrendingUp size={42}/></section>
-    <section className="metric-grid">
+    <section className="lifecycle-hero"><div><p className="eyebrow">Adjust Datascape</p><h2>Adjust analytics</h2><p>One organized view of attribution, installs, usage, active users, uninstalls, acquisition and configured custom events for app and web.</p></div><TrendingUp size={42}/></section>
+    <nav className="adjust-section-nav" aria-label="Adjust dashboard sections"><a href="#adjust-overview">Overview</a><a href="#adjust-trends">Trends</a><a href="#adjust-platforms">Platforms</a><a href="#adjust-events">Events</a><a href="#adjust-acquisition">Acquisition</a><a href="#adjust-apps">Apps &amp; versions</a></nav>
+    <section id="adjust-overview" className="metric-grid scroll-target">
       <Metric icon={Smartphone} label="Installs" value={data.summary.installs} detail="Attributed installs" />
       <Metric icon={UserMinus} label="Uninstalls" value={data.summary.uninstalls} detail="Adjust reported uninstalls" tone="amber" />
       <Metric icon={Route} label="Sessions" value={data.summary.sessions} detail="App and web sessions" tone="purple" />
       <Metric icon={Users} label="Daily active users" value={data.summary.daus} detail="Adjust DAU metric" tone="blue" />
+      <Metric icon={Users} label="Monthly active users" value={data.summary.maus} detail="Adjust MAU metric" />
+      <Metric icon={Activity} label="Clicks" value={data.summary.clicks} detail="Attribution clicks" tone="blue" />
+      <Metric icon={Globe2} label="Impressions" value={data.summary.impressions} detail="Attribution impressions" tone="purple" />
+      <Metric icon={Route} label="Reattributions" value={data.summary.reattributions} detail="Returning attributed users" tone="amber" />
     </section>
     <section className="lifecycle-grid">
-      <Panel className="lifecycle-trend" title="Adjust installs over time" subtitle="Daily attributed installs for the selected dates">
-        {data.trend.length ? <div className="chart-area"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.trend} margin={{top:12,right:16,left:-12,bottom:0}}><CartesianGrid stroke="#e7eee9" vertical={false}/><XAxis dataKey="day" tickLine={false} axisLine={false} minTickGap={28}/><YAxis tickLine={false} axisLine={false}/><Tooltip/><Area type="monotone" dataKey="installs" name="Installs" stroke="#10b768" fill="#24d17e33" strokeWidth={2.5}/></AreaChart></ResponsiveContainer></div> : <EmptyPanel title="No Adjust installs" copy="No install rows were returned for this range." />}
-      </Panel>
-      <Panel className="version-panel" title="Apps and platforms" subtitle="Daily Adjust activity by app version, operating system and platform"><div className="table-wrap acquisition-table"><table><thead><tr><th>Date</th><th>App</th><th>Version</th><th>OS</th><th>Platform</th><th>Installs</th><th>Uninstalls</th><th>Sessions</th><th>DAU</th><th>MAU</th></tr></thead><tbody>{data.apps.map((r,i)=><tr key={`${r.day}-${r.app_token}-${r.app_version}-${r.os_name}-${r.platform}-${i}`}><td>{r.day}</td><td>{r.app}</td><td>{r.app_version && r.app_version !== 'unknown' ? r.app_version : 'Not reported'}</td><td>{r.os_name}</td><td>{r.platform}</td><td>{number(r.installs)}</td><td>{number(r.uninstalls)}</td><td>{number(r.sessions)}</td><td>{number(r.daus)}</td><td>{number(r.maus)}</td></tr>)}</tbody></table></div></Panel>
-      <Panel className="version-panel" title="Attributed acquisition detail" subtitle="Network, campaign, ad group and creative detail by app and platform"><div className="table-wrap acquisition-table"><table><thead><tr><th>App</th><th>OS</th><th>Platform</th><th>Network</th><th>Campaign</th><th>Ad group</th><th>Creative</th><th>Installs</th><th>Uninstalls</th><th>Sessions</th><th>Clicks</th><th>Impressions</th></tr></thead><tbody>{data.acquisition.map((r,i)=><tr key={`${r.network}-${r.campaign}-${r.adgroup}-${r.creative}-${i}`}><td>{r.app}</td><td>{r.os_name}</td><td>{r.platform}</td><td>{r.network}</td><td>{r.campaign}</td><td>{r.adgroup || 'Not reported'}</td><td>{r.creative || 'Not reported'}</td><td>{number(r.installs)}</td><td>{number(r.uninstalls)}</td><td>{number(r.sessions)}</td><td>{number(r.clicks)}</td><td>{number(r.impressions)}</td></tr>)}</tbody></table></div></Panel>
+      <div id="adjust-trends" className="adjust-chart-grid scroll-target">
+        <Panel title="Attribution trend" subtitle="Daily installs, uninstalls and reattributions">
+          {data.trend.length ? <div className="chart-area"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.trend} margin={{top:12,right:16,left:-12,bottom:0}}><CartesianGrid stroke="#e7eee9" vertical={false}/><XAxis dataKey="day" tickLine={false} axisLine={false} minTickGap={28}/><YAxis tickLine={false} axisLine={false}/><Tooltip/><Area type="monotone" dataKey="installs" name="Installs" stroke="#10b768" fill="#24d17e2b" strokeWidth={2.5}/><Area type="monotone" dataKey="uninstalls" name="Uninstalls" stroke="#f59e0b" fill="transparent" strokeWidth={2}/><Area type="monotone" dataKey="reattributions" name="Reattributions" stroke="#8b5cf6" fill="transparent" strokeWidth={2}/></AreaChart></ResponsiveContainer></div> : <EmptyPanel title="No attribution activity" copy="Adjust returned no daily attribution rows for this range." />}
+        </Panel>
+        <Panel title="Usage trend" subtitle="Daily sessions, DAU and MAU reported by Adjust">
+          {data.trend.length ? <div className="chart-area"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.trend} margin={{top:12,right:16,left:-12,bottom:0}}><CartesianGrid stroke="#e7eee9" vertical={false}/><XAxis dataKey="day" tickLine={false} axisLine={false} minTickGap={28}/><YAxis tickLine={false} axisLine={false}/><Tooltip/><Area type="monotone" dataKey="sessions" name="Sessions" stroke="#0284c7" fill="#38bdf826" strokeWidth={2.5}/><Area type="monotone" dataKey="daus" name="DAU" stroke="#10b768" fill="transparent" strokeWidth={2}/><Area type="monotone" dataKey="maus" name="MAU" stroke="#8b5cf6" fill="transparent" strokeWidth={2}/></AreaChart></ResponsiveContainer></div> : <EmptyPanel title="No usage activity" copy="Adjust returned no daily usage rows for this range." />}
+        </Panel>
+      </div>
+      <div id="adjust-platforms" className="scroll-target version-panel"><Panel title="Platform overview" subtitle="Adjust activity grouped by Android, iOS and web"><div className="table-wrap"><table><thead><tr><th>Platform</th><th>Installs / conversions</th><th>Uninstalls</th><th>Sessions</th><th>DAU</th><th>MAU</th></tr></thead><tbody>{comparison.platforms.map(r => <tr key={r.platform}><td><strong>{r.platform}</strong></td><td>{number(r.adjustInstalls)}</td><td>{number(r.adjustUninstalls)}</td><td>{number(r.sessions)}</td><td>{number(r.daus)}</td><td>{number(r.maus)}</td></tr>)}</tbody></table></div></Panel></div>
+      <div id="adjust-events" className="scroll-target version-panel"><AdjustEventCoverage comparison={comparison} title="Custom events by platform" /></div>
+      <div id="adjust-acquisition" className="scroll-target version-panel adjust-acquisition-grid">
+        <Panel title="Top acquisition networks" subtitle="Networks ranked by attributed installs"><div className="chart-area compact-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={networks} layout="vertical" margin={{top:8,right:20,left:8,bottom:0}}><CartesianGrid stroke="#e7eee9" horizontal={false}/><XAxis type="number" tickLine={false} axisLine={false}/><YAxis type="category" dataKey="network" width={120} tickLine={false} axisLine={false}/><Tooltip/><Bar dataKey="installs" name="Installs" fill="#10b768" radius={[0,6,6,0]}/></BarChart></ResponsiveContainer></div></Panel>
+        <Panel title="Network performance" subtitle="Top network totals for attribution and usage"><div className="table-wrap"><table><thead><tr><th>Network</th><th>Installs</th><th>Sessions</th><th>Clicks</th><th>Impressions</th><th>Uninstalls</th></tr></thead><tbody>{networks.map(r => <tr key={r.network}><td><strong>{r.network}</strong></td><td>{number(r.installs)}</td><td>{number(r.sessions)}</td><td>{number(r.clicks)}</td><td>{number(r.impressions)}</td><td>{number(r.uninstalls)}</td></tr>)}</tbody></table></div></Panel>
+      </div>
+      <Panel className="version-panel" title="Campaign, ad group and creative detail" subtitle="Full Adjust acquisition hierarchy by app and platform"><div className="table-wrap acquisition-table"><table><thead><tr><th>App</th><th>OS</th><th>Platform</th><th>Network</th><th>Campaign</th><th>Ad group</th><th>Creative</th><th>Installs</th><th>Uninstalls</th><th>Sessions</th><th>Clicks</th><th>Impressions</th></tr></thead><tbody>{data.acquisition.map((r,i)=><tr key={`${r.network}-${r.campaign}-${r.adgroup}-${r.creative}-${i}`}><td>{r.app}</td><td>{r.os_name}</td><td>{r.platform}</td><td>{r.network || 'Not reported'}</td><td>{r.campaign || 'Not reported'}</td><td>{r.adgroup || 'Not reported'}</td><td>{r.creative || 'Not reported'}</td><td>{number(r.installs)}</td><td>{number(r.uninstalls)}</td><td>{number(r.sessions)}</td><td>{number(r.clicks)}</td><td>{number(r.impressions)}</td></tr>)}</tbody></table></div></Panel>
+      <div id="adjust-apps" className="scroll-target version-panel"><Panel title="Apps, versions and operating systems" subtitle="Daily Adjust activity with app token, version, OS and platform"><div className="table-wrap acquisition-table"><table><thead><tr><th>Date</th><th>App</th><th>App token</th><th>Version</th><th>OS</th><th>Platform</th><th>Installs</th><th>Uninstalls</th><th>Sessions</th><th>DAU</th><th>MAU</th></tr></thead><tbody>{data.apps.map((r,i)=><tr key={`${r.day}-${r.app_token}-${r.app_version}-${r.os_name}-${r.platform}-${i}`}><td>{r.day}</td><td>{r.app}</td><td><code>{r.app_token}</code></td><td>{r.app_version && r.app_version !== 'unknown' ? r.app_version : 'Not reported'}</td><td>{r.os_name}</td><td>{r.platform}</td><td>{number(r.installs)}</td><td>{number(r.uninstalls)}</td><td>{number(r.sessions)}</td><td>{number(r.daus)}</td><td>{number(r.maus)}</td></tr>)}</tbody></table></div></Panel></div>
       {!!data.warnings.length && <div className="coverage-note"><AlertTriangle size={17}/><div><strong>Adjust warnings</strong><span>{data.warnings.join(' ')}</span></div></div>}
     </section>
   </>
 }
 
-function ComparisonView({ lifecycle, adjust, connected }) {
+function ComparisonView({ lifecycle, adjust, ga4, connected }) {
   if (!connected) return <Panel title="GA4 vs Adjust" subtitle="Adjust connection required"><EmptyPanel title="Adjust is not connected" copy="Connect Adjust in Analytics settings to compare attributed installs with GA4 first opens." /></Panel>
   if (!lifecycle || !adjust) return <Panel title="GA4 vs Adjust" subtitle="Loading both analytics sources"><EmptyPanel title="Loading comparison" copy="Querying GA4 and Adjust for the selected date range." /></Panel>
   const comparison = buildComparison(lifecycle, adjust)
   const signedPercent = value => value == null ? '—' : `${value > 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
+  const ga4EventMap = new Map((ga4?.events || []).map(row => [row.eventName, row]))
+  const eventMappings = [
+    ['Prepaid purchases', ['purchase_prepaid', 'purchase_prepaid_Plan', 'purchase_prepaid_bundle'], 'purchase_prepaid_events'],
+    ['Postpaid purchases', ['purchase_postpaid'], 'purchase_postpaid_events'],
+    ['Voucher purchases', ['purchased_voucher'], 'purchase_evoucher_events'],
+    ['Add-on purchases', ['purchase_addon'], 'purchase_addon_events'],
+    ['Device purchases', ['purchased_device'], 'purchase_device_events'],
+    ['Roaming purchases', ['purchase_roaming'], 'purchase_roaming_events'],
+    ['VAS purchases', ['purchase_vas'], 'purchase_vas_events'],
+    ['Recharge purchases', ['purchase_recharge'], 'purchase_recharge_events'],
+    ['Bill payments', ['purchase_billpayment'], 'purchase_billpayment_events'],
+    ['Qitaf joins', ['joined_qitaf'], 'joined_qitaf_events']
+  ].map(([label, ga4Names, adjustMetric]) => {
+    const ga4Events = ga4Names.reduce((sum, name) => sum + Number(ga4EventMap.get(name)?.eventCount || 0), 0)
+    const ga4Users = ga4Names.reduce((sum, name) => sum + Number(ga4EventMap.get(name)?.totalUsers || 0), 0)
+    const adjustEvents = comparison.eventCoverage.find(row => row.metric === adjustMetric)
+    const adjustTotal = Number(adjustEvents?.app || 0) + Number(adjustEvents?.web || 0)
+    return { label, ga4Names: ga4Names.join(', '), adjustMetric, ga4Events, ga4Users, adjustTotal, difference: adjustTotal - ga4Events, variancePct: ga4Events ? (adjustTotal - ga4Events) / ga4Events : null }
+  })
+  const versions = new Map()
+  for (const row of lifecycle.versions || []) {
+    const key = row.appVersion || 'Not reported'; const item = versions.get(key) || { version: key, ga4Installs: 0, ga4Uninstalls: 0, adjustInstalls: 0, adjustUninstalls: 0, adjustSessions: 0 }
+    item[row.eventName === 'app_remove' ? 'ga4Uninstalls' : 'ga4Installs'] += Number(row.eventCount || 0); versions.set(key, item)
+  }
+  for (const row of adjust.apps || []) {
+    const key = row.app_version && row.app_version !== 'unknown' ? row.app_version : 'Not reported'; const item = versions.get(key) || { version: key, ga4Installs: 0, ga4Uninstalls: 0, adjustInstalls: 0, adjustUninstalls: 0, adjustSessions: 0 }
+    item.adjustInstalls += Number(row.installs || 0); item.adjustUninstalls += Number(row.uninstalls || 0); item.adjustSessions += Number(row.sessions || 0); versions.set(key, item)
+  }
+  const versionRows = [...versions.values()].map(row => ({ ...row, difference: row.adjustInstalls - row.ga4Installs, variancePct: varianceForUi(row.adjustInstalls, row.ga4Installs) })).sort((a,b) => Math.max(b.ga4Installs,b.adjustInstalls) - Math.max(a.ga4Installs,a.adjustInstalls)).slice(0,100)
+  const adjustNetworks = [...adjust.acquisition.reduce((map, row) => { const key = row.network || 'Not reported'; const item = map.get(key) || { name:key, installs:0, sessions:0, clicks:0, impressions:0 }; for (const metric of ['installs','sessions','clicks','impressions']) item[metric] += Number(row[metric] || 0); map.set(key,item); return map }, new Map()).values()].sort((a,b)=>b.sessions-a.sessions).slice(0,15)
   return <>
-    <section className="lifecycle-hero"><div><p className="eyebrow">Cross-platform reconciliation</p><h2>GA4 vs Adjust installs</h2><p>Compare GA4 first opens with Adjust attributed installs over the same reporting period. Difference is calculated as Adjust minus GA4.</p></div><GitCompareArrows size={42}/></section>
-    <section className="metric-grid">
+    <section className="lifecycle-hero"><div><p className="eyebrow">Cross-platform reconciliation</p><h2>GA4 vs Adjust complete analysis</h2><p>Reconcile lifecycle, platforms, versions, mapped commerce events, usage and acquisition detail for the same selected period.</p></div><GitCompareArrows size={42}/></section>
+    <nav className="adjust-section-nav" aria-label="GA4 versus Adjust sections"><a href="#compare-summary">Summary</a><a href="#compare-daily">Daily</a><a href="#compare-platforms">Platforms</a><a href="#compare-versions">Versions</a><a href="#compare-events">Events</a><a href="#compare-acquisition">Acquisition</a><a href="#compare-definitions">Definitions</a></nav>
+    <section id="compare-summary" className="metric-grid scroll-target">
       <Metric icon={Activity} label="GA4 first opens" value={comparison.ga4Installs} detail="GA4 first_open events" />
       <Metric icon={TrendingUp} label="Adjust installs" value={comparison.adjustInstalls} detail="Attributed installs" tone="blue" />
+      <Metric icon={GitCompareArrows} label="Install difference" value={comparison.difference} detail={`${signedPercent(comparison.variancePct)} Adjust vs GA4`} tone="purple" />
       <Metric icon={UserMinus} label="GA4 uninstalls" value={comparison.ga4Uninstalls} detail="Android app_remove only" tone="amber" />
       <Metric icon={UserMinus} label="Adjust uninstalls" value={comparison.adjustUninstalls} detail="Adjust reported uninstalls" tone="purple" />
+      <Metric icon={Users} label="GA4 active users" value={ga4?.summary?.activeUsers || 0} detail="Selected GA4 scope" />
+      <Metric icon={Route} label="GA4 sessions" value={ga4?.summary?.sessions || 0} detail="GA4 session definition" tone="amber" />
       <Metric icon={Route} label="Adjust sessions" value={comparison.sessions} detail="All reported platforms" tone="blue" />
       <Metric icon={Users} label="Adjust DAU" value={comparison.daus} detail="Daily active users" />
       <Metric icon={Users} label="Adjust MAU" value={comparison.maus} detail="Monthly active users" tone="purple" />
       <Metric icon={Globe2} label="Web installs" value={comparison.webInstalls} detail="Adjust platform = web" tone="amber" />
+      <Metric icon={Activity} label="GA4 total events" value={ga4?.summary?.eventCount || 0} detail="All events in selected scope" tone="blue" />
     </section>
     <section className="lifecycle-grid">
-      <Panel className="lifecycle-trend" title="Daily install comparison" subtitle="GA4 first opens and Adjust attributed installs">
+      <Panel id="compare-daily" className="lifecycle-trend scroll-target" title="Daily install comparison" subtitle="GA4 first opens, Adjust attributed installs and the daily difference">
         {comparison.daily.length ? <div className="chart-area"><ResponsiveContainer width="100%" height="100%"><AreaChart data={comparison.daily} margin={{top:12,right:16,left:-12,bottom:0}}><CartesianGrid stroke="#e7eee9" vertical={false}/><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={28}/><YAxis tickLine={false} axisLine={false}/><Tooltip/><Area type="monotone" dataKey="ga4Installs" name="GA4 first opens" stroke="#10b768" fill="#24d17e24" strokeWidth={2.5}/><Area type="monotone" dataKey="adjustInstalls" name="Adjust installs" stroke="#38bdf8" fill="#38bdf81a" strokeWidth={2.5}/></AreaChart></ResponsiveContainer></div> : <EmptyPanel title="No comparison data" copy="Neither source returned install activity for this period." />}
       </Panel>
-      <Panel className="version-panel" title="iOS, Android and web comparison" subtitle="Installs, uninstalls and usage by operating system/platform"><div className="table-wrap"><table><thead><tr><th>Platform</th><th>GA4 installs</th><th>GA4 uninstalls</th><th>Adjust installs</th><th>Adjust uninstalls</th><th>Sessions</th><th>DAU</th><th>MAU</th><th>Variance</th></tr></thead><tbody>{comparison.platforms.map(row => <tr key={row.platform}><td>{row.platform}</td><td>{number(row.ga4Installs)}</td><td>{number(row.ga4Uninstalls)}</td><td>{number(row.adjustInstalls)}</td><td>{number(row.adjustUninstalls)}</td><td>{number(row.sessions)}</td><td>{number(row.daus)}</td><td>{number(row.maus)}</td><td>{signedPercent(row.variancePct)}</td></tr>)}{!comparison.platforms.length && <tr><td colSpan="9" className="table-empty">No platform rows were returned.</td></tr>}</tbody></table></div></Panel>
-      <div className="coverage-note"><ShieldCheck size={17}/><div><strong>Comparison definition</strong><span>GA4 <code>first_open</code> records a first launch after an install or reinstall. Adjust installs follow Adjust attribution rules. A variance is expected and should be used for reconciliation, not treated automatically as a tracking error.</span></div></div>
+      <Panel className="version-panel" title="Daily reconciliation detail" subtitle="Exact daily values, difference and variance"><div className="table-wrap acquisition-table"><table><thead><tr><th>Date</th><th>GA4 first opens</th><th>Adjust installs</th><th>Difference</th><th>Variance</th></tr></thead><tbody>{comparison.daily.map(row => <tr key={row.date}><td>{row.date}</td><td>{number(row.ga4Installs)}</td><td>{number(row.adjustInstalls)}</td><td>{number(row.difference)}</td><td>{signedPercent(row.variancePct)}</td></tr>)}</tbody></table></div></Panel>
+      <div id="compare-platforms" className="scroll-target version-panel"><Panel title="Android, iOS and web reconciliation" subtitle="Lifecycle and usage by operating system/platform"><div className="table-wrap"><table><thead><tr><th>Platform</th><th>GA4 installs</th><th>GA4 uninstalls</th><th>Adjust installs</th><th>Adjust uninstalls</th><th>Adjust sessions</th><th>DAU</th><th>MAU</th><th>Install difference</th><th>Variance</th></tr></thead><tbody>{comparison.platforms.map(row => <tr key={row.platform}><td><strong>{row.platform}</strong></td><td>{number(row.ga4Installs)}</td><td>{number(row.ga4Uninstalls)}</td><td>{number(row.adjustInstalls)}</td><td>{number(row.adjustUninstalls)}</td><td>{number(row.sessions)}</td><td>{number(row.daus)}</td><td>{number(row.maus)}</td><td>{number(row.difference)}</td><td>{signedPercent(row.variancePct)}</td></tr>)}{!comparison.platforms.length && <tr><td colSpan="10" className="table-empty">No platform rows were returned.</td></tr>}</tbody></table></div></Panel></div>
+      <div id="compare-versions" className="scroll-target version-panel"><Panel title="App-version reconciliation" subtitle="GA4 lifecycle events compared with Adjust installs, uninstalls and sessions"><div className="table-wrap acquisition-table"><table><thead><tr><th>App version</th><th>GA4 installs</th><th>GA4 uninstalls</th><th>Adjust installs</th><th>Adjust uninstalls</th><th>Adjust sessions</th><th>Install difference</th><th>Variance</th></tr></thead><tbody>{versionRows.map(row => <tr key={row.version}><td><strong>{row.version}</strong></td><td>{number(row.ga4Installs)}</td><td>{number(row.ga4Uninstalls)}</td><td>{number(row.adjustInstalls)}</td><td>{number(row.adjustUninstalls)}</td><td>{number(row.adjustSessions)}</td><td>{number(row.difference)}</td><td>{signedPercent(row.variancePct)}</td></tr>)}</tbody></table></div></Panel></div>
+      <div id="compare-events" className="scroll-target version-panel"><Panel title="Mapped commerce-event reconciliation" subtitle="GA4 event counts versus the closest configured Adjust event metrics"><div className="table-wrap"><table><thead><tr><th>Business event</th><th>GA4 event names</th><th>GA4 events</th><th>GA4 users</th><th>Adjust metric</th><th>Adjust events</th><th>Difference</th><th>Variance</th></tr></thead><tbody>{eventMappings.map(row => <tr key={row.label}><td><strong>{row.label}</strong></td><td><code>{row.ga4Names}</code></td><td>{number(row.ga4Events)}</td><td>{number(row.ga4Users)}</td><td><code>{row.adjustMetric}</code></td><td>{number(row.adjustTotal)}</td><td>{number(row.difference)}</td><td>{signedPercent(row.variancePct)}</td></tr>)}</tbody></table></div><div className="coverage-note"><AlertTriangle size={17}/><div><strong>Event mapping limitation</strong><span>These rows compare similarly named business signals, not identical attribution pipelines. Differences can result from SDK delivery, consent, deduplication, event naming, platform filters and Adjust attribution rules.</span></div></div></Panel></div>
+      <AdjustEventCoverage comparison={comparison} title="Adjust event coverage behind the comparison" />
+      <div id="compare-acquisition" className="scroll-target version-panel adjust-acquisition-grid"><Panel title="GA4 traffic sources" subtitle="GA4 sessions and active users by source / medium"><div className="table-wrap acquisition-table"><table><thead><tr><th>Source / medium</th><th>Sessions</th><th>Active users</th></tr></thead><tbody>{(ga4?.sources || []).map(row => <tr key={row.sessionSourceMedium}><td><strong>{row.sessionSourceMedium}</strong></td><td>{number(row.sessions)}</td><td>{number(row.activeUsers)}</td></tr>)}</tbody></table></div></Panel><Panel title="Adjust attribution networks" subtitle="Adjust installs, sessions, clicks and impressions by network"><div className="table-wrap acquisition-table"><table><thead><tr><th>Network</th><th>Installs</th><th>Sessions</th><th>Clicks</th><th>Impressions</th></tr></thead><tbody>{adjustNetworks.map(row => <tr key={row.name}><td><strong>{row.name}</strong></td><td>{number(row.installs)}</td><td>{number(row.sessions)}</td><td>{number(row.clicks)}</td><td>{number(row.impressions)}</td></tr>)}</tbody></table></div></Panel></div>
+      <Panel className="version-panel" title="Adjust campaign detail" subtitle="Campaign, ad group and creative records supporting the attribution comparison"><div className="table-wrap acquisition-table"><table><thead><tr><th>Platform</th><th>Network</th><th>Campaign</th><th>Ad group</th><th>Creative</th><th>Installs</th><th>Sessions</th><th>Clicks</th><th>Impressions</th></tr></thead><tbody>{adjust.acquisition.map((row,index) => <tr key={`${row.network}-${row.campaign}-${row.adgroup}-${row.creative}-${index}`}><td>{row.platform}</td><td>{row.network || 'Not reported'}</td><td>{row.campaign || 'Not reported'}</td><td>{row.adgroup || 'Not reported'}</td><td>{row.creative || 'Not reported'}</td><td>{number(row.installs)}</td><td>{number(row.sessions)}</td><td>{number(row.clicks)}</td><td>{number(row.impressions)}</td></tr>)}</tbody></table></div></Panel>
+      <div id="compare-definitions" className="coverage-note scroll-target"><ShieldCheck size={17}/><div><strong>How to interpret this comparison</strong><span>GA4 <code>first_open</code> is the first app launch after install or reinstall. Adjust installs follow Adjust attribution rules. GA4 <code>app_remove</code> primarily covers Android; zero iOS removals does not prove no uninstall occurred. GA4 and Adjust sessions, users and commerce events can use different identity, attribution, deduplication and reporting rules, so variance is a reconciliation signal rather than automatic proof of a tracking defect.</span></div></div>
     </section>
   </>
 }
 
 function AnalyticsAssistant({ context, messages, setMessages }) {
   const [question, setQuestion] = useState('')
-  const ask = prompt => {
+  const [busy, setBusy] = useState(false)
+  const ask = async prompt => {
     const text = (prompt ?? question).trim()
-    if (!text) return
-    setMessages(items => [...items, { role: 'user', text }, { role: 'assistant', text: answerAnalyticsQuestion(text, context) }])
+    if (!text || busy) return
+    setMessages(items => [...items, { role: 'user', text }]); setBusy(true)
+    try { const answer = await answerAkQuestion(text, context); setMessages(items => [...items, { role: 'assistant', text: answer }]) }
+    catch (error) { setMessages(items => [...items, { role: 'assistant', text: `I couldn’t load that filtered report: ${error.message}` }]) }
+    finally { setBusy(false) }
     setQuestion('')
   }
   const suggestions = ['Compare GA4 and Adjust installs', 'Show the GA4 summary', 'What are the top traffic sources?', 'How many failed purchase journeys?', 'Show app uninstalls']
   return <section className="assistant-layout">
-    <div className="assistant-intro"><div className="assistant-orb"><Bot size={30}/></div><div><p className="eyebrow">Analytics assistant</p><h2>Ask your connected data</h2><p>Answers use the GA4, URL journey and Adjust reports already loaded for the selected dates.</p></div></div>
+    <div className="assistant-intro"><div className="assistant-orb"><Bot size={30}/></div><div><p className="eyebrow">AK analytics assistant</p><h2>Ask AK</h2><p>Ask about any information loaded across GA4, Adjust, journeys, sales, products, campaigns, app activity, engagement and URLs.</p></div></div>
     <div className="suggestion-row">{suggestions.map(item => <button key={item} onClick={() => ask(item)}>{item}</button>)}</div>
-    <div className="chat-panel" aria-live="polite">{messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><span>{message.role === 'assistant' ? 'Analytics assistant' : 'You'}</span><p>{message.text}</p></div>)}</div>
-    <div className="chat-input"><input aria-label="Ask analytics assistant" value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') ask() }} placeholder="Ask about users, events, journeys, campaigns, installs or comparisons…"/><button className="primary-button" onClick={() => ask()} disabled={!question.trim()}><Send size={17}/>Ask</button></div>
+    <div className="chat-panel" aria-live="polite">{messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><span>{message.role === 'assistant' ? 'AK' : 'You'}</span><p>{message.text}</p></div>)}</div>
+    <div className="chat-input"><input aria-label="Ask AK" value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') ask() }} placeholder="Ask AK about any dashboard information…"/><button className="primary-button" onClick={() => ask()} disabled={!question.trim() || busy}>{busy ? <RefreshCw size={17} className="spin"/> : <Send size={17}/>}Ask AK</button></div>
     <div className="coverage-note"><ShieldCheck size={17}/><div><strong>Private, grounded answers</strong><span>This assistant reads only the reports already loaded in this dashboard. It does not send analytics data to an external AI provider and will state when a requested metric is unavailable.</span></div></div>
   </section>
+}
+
+function AkFloatingAssistant({ context, messages, setMessages }) {
+  const [open, setOpen] = useState(false)
+  const [maximized, setMaximized] = useState(false)
+  const [question, setQuestion] = useState('')
+  const [busy, setBusy] = useState(false)
+  const ask = async () => {
+    const text = question.trim()
+    if (!text || busy) return
+    setMessages(items => [...items, { role: 'user', text }]); setBusy(true)
+    try { const answer = await answerAkQuestion(text, context); setMessages(items => [...items, { role: 'assistant', text: answer }]) }
+    catch (error) { setMessages(items => [...items, { role: 'assistant', text: `I couldn’t load that filtered report: ${error.message}` }]) }
+    finally { setBusy(false) }
+    setQuestion('')
+  }
+  if (!open) return <button className="ak-launcher" onClick={() => setOpen(true)} aria-label="Ask AK" title="Ask AK"><MessageCircle size={25}/><span>AK</span></button>
+  return <aside className={`ak-widget ${maximized ? 'maximized' : ''}`} aria-label="Ask AK analytics assistant">
+    <header><div className="ak-avatar"><Bot size={20}/></div><div><strong>Ask AK</strong><span>Analytics assistant</span></div><button onClick={() => setMaximized(value => !value)} aria-label={maximized ? 'Restore AK chat' : 'Maximize AK chat'} title={maximized ? 'Restore' : 'Maximize'}>{maximized ? <Minimize2 size={17}/> : <Maximize2 size={17}/>}</button><button onClick={() => setOpen(false)} aria-label="Minimize AK chat" title="Minimize"><Minus size={18}/></button></header>
+    <div className="ak-messages" aria-live="polite">{messages.map((message,index) => <div key={index} className={`chat-message ${message.role}`}><span>{message.role === 'assistant' ? 'AK' : 'You'}</span><p>{message.text}</p></div>)}</div>
+    <div className="ak-input"><input aria-label="Ask AK a question" value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') ask() }} placeholder="Ask about this dashboard…"/><button onClick={ask} disabled={!question.trim() || busy} aria-label="Send question to AK">{busy ? <RefreshCw size={17} className="spin"/> : <Send size={17}/>}</button></div>
+  </aside>
 }
 
 function EmptyPanel({ title, copy }) {
@@ -569,11 +709,101 @@ function EmptyPanel({ title, copy }) {
   </div>
 }
 
-function Panel({ title, subtitle, action, children, className = '' }) {
-  return <section className={`panel ${className}`}>
+function Panel({ title, subtitle, action, children, className = '', id }) {
+  return <section id={id} className={`panel ${className}`}>
     <header className="panel-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</header>
     {children}
   </section>
+}
+
+function PlaystoreView({ data, appStoreData, connected, appStoreConnected }) {
+  const [storeTab, setStoreTab] = useState('overview')
+  const mystcApple = appStoreData?.apps?.find(app => app.id === '511293831')
+  const snapshot = {
+    app: 'mystc KW', packageName: 'com.pixilapps.selfcare', status: 'Production', installedAudience: 398000,
+    latestRelease: 'Sep 8, 2026', lastUpdated: 'Sep 29, 2026', installs: 233000, installBase: '62.5%',
+    crashRate: '0.13%', anrRate: '0.10%', rating: '4.17', acquisitions: 49300, firstOpeners: 29100, monthlyActiveDevices: 299000
+  }
+  const crash = data?.crashTrend?.at(-1)
+  const anr = data?.anrTrend?.at(-1)
+  const vitalTrend = (data?.crashTrend || []).map(row => ({ ...row, crashPct: row.crashRate * 100, anrPct: (data?.anrTrend || []).find(item => item.date === row.date)?.anrRate * 100 }))
+  const appleVersions = [...(appStoreData?.versions || [])].sort((a,b) => String(b.createdDate).localeCompare(String(a.createdDate)))
+  const stateCounts = appleVersions.reduce((map,row) => { map[row.state || 'UNKNOWN'] = (map[row.state || 'UNKNOWN'] || 0) + 1; return map }, {})
+  const stateLabel = value => String(value || 'Not reported').toLowerCase().replaceAll('_',' ').replace(/\b\w/g, c => c.toUpperCase())
+  return <>
+    <section className="stores-hero">
+      <div><span className="eyebrow">Unified mobile distribution</span><h2>mystc KW store performance</h2><p>One operational view for Android quality, Apple releases, acquisition snapshots and API coverage.</p></div>
+      <div className="store-status-pair"><span className={connected ? 'ok' : ''}><Smartphone size={16}/>Google Play {connected ? 'connected' : 'offline'}</span><span className={appStoreConnected ? 'ok' : ''}><CheckCircle2 size={16}/>App Store {appStoreConnected ? 'connected' : 'offline'}</span></div>
+    </section>
+    <nav className="store-tabs" aria-label="App store dashboard sections">{[['overview','Overview'],['activity','Store installs & uninstalls'],['google','Google Play'],['apple','Apple App Store'],['coverage','Data coverage']].map(([id,label]) => <button key={id} className={storeTab === id ? 'active' : ''} onClick={() => setStoreTab(id)}>{label}</button>)}</nav>
+    <section className="metric-grid store-kpis">
+      <Metric icon={Download} label="Google Play installs" value={snapshot.installs} detail="Play Console snapshot · last 28 days" />
+      <Metric icon={UserMinus} label="Google Play uninstalls" value="Unavailable" detail="Not exposed by connected API" tone="amber" />
+      <Metric icon={Download} label="App Store downloads" value="Not connected" detail="Analytics Reports ingestion required" tone="blue" />
+      <Metric icon={UserMinus} label="App Store deletions" value="Not connected" detail="Installations & Deletions report required" tone="purple" />
+    </section>
+    <section className="metric-grid store-quality-kpis">
+      <Metric icon={Bug} label="Android crash rate" value={crash ? precisePercent(crash.crashRate) : null} detail={crash ? `${crash.date} · ${number(crash.distinctUsers)} measured users` : 'Live API loading'} tone="purple" />
+      <Metric icon={AlertTriangle} label="Android ANR rate" value={anr ? precisePercent(anr.anrRate) : null} detail={anr ? `${anr.date} · ${number(anr.distinctUsers)} measured users` : 'Live API loading'} tone="amber" />
+      <Metric icon={Smartphone} label="Current iOS release" value="6.2.0" detail="Ready for Distribution" tone="blue" />
+      <Metric icon={Download} label="Android installed audience" value={snapshot.installedAudience} detail="Play Console snapshot · Oct 1" />
+    </section>
+
+    {storeTab === 'overview' && <section className="store-overview">
+      <div className="store-overview-strip"><div><span>Store operations</span><strong>2 connected storefronts</strong><small>Google Play quality and Apple release metadata</small></div><div><span>Android audience</span><strong>{number(snapshot.installedAudience)}</strong><small>Play Console snapshot · Oct 1, 2026</small></div><div><span>Current iOS release</span><strong>6.2.0</strong><small>Ready for Distribution</small></div><div><span>Latest Android quality date</span><strong>{crash?.date || 'Loading'}</strong><small>Developer Reporting API</small></div></div>
+
+      <div className="store-platform-grid">
+        <article className="store-platform-card google"><header><div className="store-platform-icon"><Smartphone size={23}/></div><div><span>Google Play</span><h3>mystc KW for Android</h3></div><i>Connected</i></header><div className="store-platform-main"><div><span>Installs</span><strong>{number(snapshot.installs)}</strong><small>Last 28-day Console snapshot</small></div><div><span>Installed audience</span><strong>{number(snapshot.installedAudience)}</strong><small>{snapshot.installBase} install base</small></div></div><footer><span><b>{snapshot.rating}</b> average rating</span><span><b>{snapshot.latestRelease}</b> latest release</span><span><b>{data?.packageName || snapshot.packageName}</b> package</span></footer></article>
+        <article className="store-platform-card apple"><header><div className="store-platform-icon"><Download size={23}/></div><div><span>Apple App Store</span><h3>mystc KW for iOS</h3></div><i>Connected</i></header><div className="store-platform-main"><div><span>Production version</span><strong>6.2.0</strong><small>Ready for Distribution</small></div><div><span>Next version</span><strong>6.3.0</strong><small>Prepare for Submission</small></div></div><footer><span><b>511293831</b> Apple ID</span><span><b>{mystcApple?.bundleId || 'Loading'}</b> bundle ID</span><span><b>{number(appleVersions.length)}</b> version records</span></footer></article>
+      </div>
+
+      <section className="dashboard-grid playstore-grid store-overview-main">
+        <Panel className="store-vitals-panel" title="Android stability trend" subtitle={data?.period ? `${data.period.startDate} to ${data.period.endDate} · live Google Play Developer Reporting API` : 'Loading live Google Play vitals'}>
+          {vitalTrend.length ? <div className="chart-area"><ResponsiveContainer width="100%" height="100%"><AreaChart data={vitalTrend} margin={{top:12,right:18,left:0,bottom:0}}><CartesianGrid stroke="#e7eee9" vertical={false}/><XAxis dataKey="date" tickFormatter={dateLabel} tickLine={false} axisLine={false} minTickGap={24}/><YAxis tickFormatter={v=>`${v.toFixed(2)}%`} tickLine={false} axisLine={false}/><Tooltip formatter={(value,name)=>[`${Number(value).toFixed(3)}%`,name]}/><Area type="monotone" dataKey="crashPct" name="Crash rate" stroke="#8b5cf6" fill="#8b5cf620" strokeWidth={2.5}/><Area type="monotone" dataKey="anrPct" name="ANR rate" stroke="#f59e0b" fill="#f59e0b18" strokeWidth={2.5}/></AreaChart></ResponsiveContainer></div> : <EmptyPanel title="Vitals are loading" copy="Google Play crash and ANR history will appear here."/>}
+        </Panel>
+        <Panel title="Latest Android quality" subtitle="Current user-normalized Play vitals"><div className="store-health-list"><div><span>Crash rate</span><strong>{crash ? precisePercent(crash.crashRate) : 'Loading'}</strong><small>{number(crash?.distinctUsers)} measured users</small></div><div><span>User-perceived crash</span><strong>{crash ? precisePercent(crash.userPerceivedCrashRate) : 'Loading'}</strong></div><div><span>ANR rate</span><strong>{anr ? precisePercent(anr.anrRate) : 'Loading'}</strong><small>{number(anr?.distinctUsers)} measured users</small></div><div><span>User-perceived ANR</span><strong>{anr ? precisePercent(anr.userPerceivedAnrRate) : 'Loading'}</strong></div></div></Panel>
+        <Panel title="Google Play acquisition snapshot" subtitle="Last 28 days · observed Oct 1, 2026"><div className="detail-grid"><div><span>Device acquisitions</span><strong>{number(snapshot.acquisitions)}</strong><small>down 18%</small></div><div><span>First openers</span><strong>{number(snapshot.firstOpeners)}</strong><small>down 25%</small></div><div><span>Monthly active devices</span><strong>{number(snapshot.monthlyActiveDevices)}</strong></div><div><span>Installs</span><strong>{number(snapshot.installs)}</strong></div><div><span>Install base</span><strong>{snapshot.installBase}</strong></div><div><span>Average rating</span><strong>{snapshot.rating}</strong><small>up 0.11</small></div></div></Panel>
+        <Panel title="Release and data readiness" subtitle="Current operational status across both stores"><div className="attention-list"><div className="attention green"><CheckCircle2 size={18}/><span><strong>Google Play reporting connected</strong><small>Live Android crash and ANR metrics are available.</small></span></div><div className="attention green"><CheckCircle2 size={18}/><span><strong>App Store Connect authenticated</strong><small>App identity, version history and release states are available.</small></span></div><div className="attention neutral"><Radio size={18}/><span><strong>Apple Analytics Reports not ingested</strong><small>Downloads, installations and deletions require an Analytics Report Request and scheduled ingestion.</small></span></div><div className="attention neutral"><UserMinus size={18}/><span><strong>Apple deletion data is available after connection</strong><small>Coverage includes opted-in users and Apple privacy thresholds.</small></span></div></div></Panel>
+      </section>
+    </section>}
+
+    {storeTab === 'activity' && <section className="dashboard-grid playstore-grid">
+      <Panel title="Store-only acquisition coverage" subtitle="Only Google Play Console and Apple App Store Connect sources are used"><div className="table-wrap"><table><thead><tr><th>Store</th><th>Installs / downloads</th><th>Uninstalls / deletions</th><th>Date breakdown</th><th>Version breakdown</th></tr></thead><tbody><tr><td><strong>Google Play</strong></td><td>{number(snapshot.installs)} <small>snapshot</small></td><td>Not connected</td><td>Not exposed by connected Reporting API</td><td>Not exposed by connected Reporting API</td></tr><tr><td><strong>Apple App Store</strong></td><td>Not connected</td><td>Not connected</td><td>Requires Analytics Reports ingestion</td><td>Requires Analytics Reports ingestion</td></tr></tbody></table></div></Panel>
+      <Panel title="Google Play snapshot" subtitle="Last 28 days · observed Oct 1, 2026"><div className="detail-grid"><div><span>Installs</span><strong>{number(snapshot.installs)}</strong></div><div><span>Installed audience</span><strong>{number(snapshot.installedAudience)}</strong></div><div><span>Device acquisitions</span><strong>{number(snapshot.acquisitions)}</strong></div><div><span>First openers</span><strong>{number(snapshot.firstOpeners)}</strong></div><div><span>Monthly active devices</span><strong>{number(snapshot.monthlyActiveDevices)}</strong></div><div><span>Install base</span><strong>{snapshot.installBase}</strong></div></div></Panel>
+      <div className="coverage-note"><ShieldCheck size={17}/><div><strong>No GA4 or Adjust data is used here</strong><span>The connected Google Play Developer Reporting API supplies quality metrics, not acquisition or uninstall reports. The displayed Play install value is a dated Console snapshot. Apple App Store Connect currently supplies app and release metadata. Apple Analytics Reports can provide downloads plus privacy-limited installations and deletions after an Admin creates the initial report request and the dashboard ingests its generated files.</span></div></div>
+    </section>}
+
+    {storeTab === 'google' && <section className="dashboard-grid playstore-grid">
+      <Panel title="Google Play app identity" subtitle="Live authorization plus production snapshot"><div className="detail-grid"><div><span>App</span><strong>{snapshot.app}</strong></div><div><span>Package</span><strong>{data?.packageName || snapshot.packageName}</strong></div><div><span>Status</span><strong>{snapshot.status}</strong></div><div><span>Latest release</span><strong>{snapshot.latestRelease}</strong></div><div><span>Last updated</span><strong>{snapshot.lastUpdated}</strong></div><div><span>API apps visible</span><strong>{number(data?.apps?.length)}</strong></div></div></Panel>
+      <Panel title="Latest Android vitals" subtitle="Daily user-normalized quality measures"><div className="detail-grid"><div><span>Crash rate</span><strong>{crash ? precisePercent(crash.crashRate) : 'Unavailable'}</strong><small>28-day weighted: {precisePercent(crash?.crashRate28dUserWeighted)}</small></div><div><span>User-perceived crash</span><strong>{crash ? precisePercent(crash.userPerceivedCrashRate) : 'Unavailable'}</strong></div><div><span>Crash denominator</span><strong>{number(crash?.distinctUsers)}</strong><small>distinct measured users</small></div><div><span>ANR rate</span><strong>{anr ? precisePercent(anr.anrRate) : 'Unavailable'}</strong><small>28-day weighted: {precisePercent(anr?.anrRate28dUserWeighted)}</small></div><div><span>User-perceived ANR</span><strong>{anr ? precisePercent(anr.userPerceivedAnrRate) : 'Unavailable'}</strong></div><div><span>ANR denominator</span><strong>{number(anr?.distinctUsers)}</strong><small>distinct measured users</small></div></div></Panel>
+      <Panel className="table-panel" title="Daily Android quality detail" subtitle="Exact rates and measured-user population from Google Play"><div className="table-wrap"><table><thead><tr><th>Date</th><th>Crash rate</th><th>28d crash</th><th>ANR rate</th><th>28d ANR</th><th>Measured users</th></tr></thead><tbody>{vitalTrend.slice().reverse().map(row=><tr key={row.date}><td>{row.date}</td><td>{precisePercent(row.crashRate)}</td><td>{precisePercent(row.crashRate28dUserWeighted)}</td><td>{precisePercent((data.anrTrend.find(x=>x.date===row.date)||{}).anrRate)}</td><td>{precisePercent((data.anrTrend.find(x=>x.date===row.date)||{}).anrRate28dUserWeighted)}</td><td>{number(row.distinctUsers)}</td></tr>)}</tbody></table></div></Panel>
+    </section>}
+
+    {storeTab === 'apple' && <section className="dashboard-grid playstore-grid">
+      <Panel title="mystc KW App Store identity" subtitle="Live App Store Connect API"><div className="detail-grid"><div><span>Apple ID</span><strong>511293831</strong></div><div><span>Bundle ID</span><strong>{mystcApple?.bundleId || 'Loading'}</strong></div><div><span>SKU</span><strong>{mystcApple?.sku || 'Loading'}</strong></div><div><span>Primary locale</span><strong>{mystcApple?.primaryLocale || 'Loading'}</strong></div><div><span>API apps visible</span><strong>{number(appStoreData?.apps?.length)}</strong></div><div><span>Version records</span><strong>{number(appleVersions.length)}</strong></div></div></Panel>
+      <Panel title="Version-state distribution" subtitle="All mystc KW version records returned by Apple"><div className="state-chips">{Object.entries(stateCounts).sort((a,b)=>b[1]-a[1]).map(([state,count])=><div key={state}><strong>{number(count)}</strong><span>{stateLabel(state)}</span></div>)}</div></Panel>
+      <Panel className="table-panel" title="Apple release history" subtitle="Newest version records first"><div className="table-wrap"><table><thead><tr><th>Version</th><th>Platform</th><th>State</th><th>Release type</th><th>Created</th></tr></thead><tbody>{appleVersions.slice(0,30).map(row=><tr key={row.id}><td><strong>{row.version}</strong></td><td>{stateLabel(row.platform)}</td><td><span className="store-state">{stateLabel(row.state)}</span></td><td>{stateLabel(row.releaseType)}</td><td>{row.createdDate ? new Date(row.createdDate).toLocaleString() : 'Not reported'}</td></tr>)}</tbody></table></div></Panel>
+      <Panel title="Build access" subtitle="App Store Connect permission coverage">{appStoreData?.coverage?.builds ? <div className="compact-list">{appStoreData.builds.slice(0,10).map(row=><div key={row.id}><span>{row.version}</span><strong>{stateLabel(row.processingState)}</strong></div>)}</div> : <EmptyPanel title="Build records unavailable" copy="The current Sales and Reports key does not permit the Builds endpoint. Version and app metadata remain connected."/>}</Panel>
+    </section>}
+
+    {storeTab === 'coverage' && <Panel title="Sources, freshness and limitations" subtitle="Exactly what each connection currently contributes"><div className="table-wrap"><table><thead><tr><th>Source</th><th>Status</th><th>Available now</th><th>Freshness / limitation</th></tr></thead><tbody><tr><td><strong>Google Play Developer Reporting API</strong></td><td><span className="source-live">Live</span></td><td>Crash rate, ANR rate, user-perceived rates, measured-user denominators, 28-day history</td><td>Latest API date {data?.period?.endDate || 'loading'}</td></tr><tr><td><strong>Google Play Console snapshot</strong></td><td><span className="source-snapshot">Snapshot</span></td><td>Installed audience, installs, install base, acquisitions, first openers, MAU, rating</td><td>Observed Oct 1, 2026; not automatically refreshed</td></tr><tr><td><strong>App Store Connect API</strong></td><td><span className="source-live">Live</span></td><td>App identity, bundle ID, SKU, locale, version history and release states</td><td>{appStoreData?.generatedAt ? `Refreshed ${new Date(appStoreData.generatedAt).toLocaleString()}` : 'Loading'}</td></tr><tr><td><strong>Apple Sales &amp; Trends reports</strong></td><td><span className="source-limited">Not ingested</span></td><td>Downloads, redownloads, updates, proceeds and territory reports</td><td>Requires vendor-number report ingestion; missing values are not shown as zero</td></tr><tr><td><strong>Apple builds</strong></td><td><span className={appStoreData?.coverage?.builds ? 'source-live' : 'source-limited'}>{appStoreData?.coverage?.builds ? 'Live' : 'Restricted'}</span></td><td>{appStoreData?.coverage?.builds ? 'Recent build processing records' : 'No build records returned'}</td><td>{appStoreData?.coverage?.builds ? 'Current API response' : 'Sales and Reports key does not permit this endpoint'}</td></tr></tbody></table></div></Panel>}
+  </>
+}
+
+function SettingsDashboard({ status, onConfigure }) {
+  const connections = [
+    { name:'Google Analytics 4', connected:status.connected, detail:status.connected ? `Property ${status.propertyId} · ${status.serviceAccountEmail}` : 'Property ID and service account required', icon:BarChart3 },
+    { name:'Firebase / Crashlytics', connected:status.firebaseConnected, detail:status.firebaseConnected ? 'Firebase project connection is active' : 'Detailed Crashlytics connection has not been configured', icon:Bug },
+    { name:'Adjust', connected:status.adjustConnected, detail:status.adjustConnected ? 'Adjust Report Service authorization is active' : 'Adjust API token required', icon:TrendingUp },
+    { name:'Google Play', connected:status.playstoreConnected, detail:status.playstoreConnected ? `${status.playPackageName} · ${status.playServiceAccountEmail}` : 'Play Developer Reporting service account required', icon:Smartphone },
+    { name:'Apple App Store', connected:status.appstoreConnected, detail:status.appstoreConnected ? `App Store Connect API key ${status.appstoreKeyId}` : 'Issuer ID, Key ID and private .p8 key required', icon:Download }
+  ]
+  const online = connections.filter(item => item.connected).length
+  return <>
+    <section className="settings-summary"><div><span className="eyebrow">Connection center</span><h2>Analytics and store integrations</h2><p>Review every source connection and open secure configuration from one place.</p></div><div className="settings-score"><strong>{online}/{connections.length}</strong><span>sources connected</span></div></section>
+    <section className="settings-connections">{connections.map(({name,connected,detail,icon:Icon}) => <article key={name} className={connected ? 'connected' : 'offline'}><div className="settings-connection-icon"><Icon size={21}/></div><div><span className="connection-state"><i/>{connected ? 'Connected' : 'Not connected'}</span><h3>{name}</h3><p>{detail}</p></div></article>)}</section>
+    <Panel title="Secure connection management" subtitle="Credentials are encrypted on this server and are never returned to the browser" action={<button className="primary-button" onClick={onConfigure}><Settings2 size={17}/>Open Analytics settings</button>}><div className="settings-guidance"><ShieldCheck size={24}/><div><strong>Super Admin only</strong><p>Use Analytics settings to test or update GA4, Adjust, Google Play and Apple App Store credentials. Existing secrets remain hidden. Firebase is shown separately because its detailed Crashlytics API connection is not configured yet.</p></div></div></Panel>
+  </>
 }
 
 function SettingsModal({ status, onClose, onSaved }) {
@@ -582,6 +812,11 @@ function SettingsModal({ status, onClose, onSaved }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState(null)
   const [adjustToken, setAdjustToken] = useState('')
+  const [playPackageName, setPlayPackageName] = useState(status.playPackageName || 'com.pixilapps.selfcare')
+  const [playJson, setPlayJson] = useState('')
+  const [appStoreIssuerId, setAppStoreIssuerId] = useState('')
+  const [appStoreKeyId, setAppStoreKeyId] = useState('')
+  const [appStorePrivateKey, setAppStorePrivateKey] = useState('')
 
   async function submit(mode) {
     setBusy(true); setMessage(null)
@@ -611,6 +846,24 @@ function SettingsModal({ status, onClose, onSaved }) {
     finally { setBusy(false) }
   }
 
+  async function savePlaystore() {
+    setBusy(true); setMessage(null)
+    try {
+      const result = await request('/playstore-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packageName: playPackageName, serviceAccountJson: playJson }) })
+      setMessage({ type: 'success', text: `Playstore connected for ${result.packageName}.` }); setPlayJson(''); await onSaved()
+    } catch (error) { setMessage({ type: 'error', text: error.message }) }
+    finally { setBusy(false) }
+  }
+
+  async function saveAppStore() {
+    setBusy(true); setMessage(null)
+    try {
+      const result = await request('/appstore-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ issuerId: appStoreIssuerId, keyId: appStoreKeyId, privateKey: appStorePrivateKey }) })
+      setMessage({ type: 'success', text: `App Store Connect API connected. ${result.appCount} app record(s) are accessible.` }); setAppStorePrivateKey(''); await onSaved()
+    } catch (error) { setMessage({ type: 'error', text: error.message }) }
+    finally { setBusy(false) }
+  }
+
   return <div className="modal-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose()}>
     <div className="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <button className="icon-button modal-close" onClick={onClose} aria-label="Close settings"><X size={19} /></button>
@@ -626,6 +879,21 @@ function SettingsModal({ status, onClose, onSaved }) {
       {status.adjustConnected && <div className="current-connection"><CheckCircle2 size={17}/><span>Adjust API connected</span></div>}
       <label>Adjust API token<input type="password" aria-label="Adjust API token" value={adjustToken} onChange={event => setAdjustToken(event.target.value)} placeholder="Paste the API token from Adjust account settings" autoComplete="off"/></label>
       <button className="secondary-button" disabled={busy || !adjustToken} onClick={saveAdjust}>Save Adjust connection</button>
+      <hr className="settings-divider"/>
+      <h3>Google Play Developer Reporting</h3>
+      {status.playstoreConnected && <div className="current-connection"><CheckCircle2 size={17}/><span>Playstore API connected as <strong>{status.playServiceAccountEmail}</strong></span></div>}
+      <label>Android package name<input value={playPackageName} onChange={event => setPlayPackageName(event.target.value)} placeholder="com.example.app" /></label>
+      <label>Play service account JSON<textarea value={playJson} onChange={event => setPlayJson(event.target.value)} placeholder="Paste a service account authorized in Play Console" rows="7" spellCheck="false" /></label>
+      <p className="security-note">The service account must first be added by a Play Console owner under Users and permissions. Credentials are encrypted and never returned to the browser.</p>
+      <button className="secondary-button" disabled={busy || !playPackageName || !playJson} onClick={savePlaystore}>Save Playstore connection</button>
+      <hr className="settings-divider"/>
+      <h3>Apple App Store Connect</h3>
+      {status.appstoreConnected && <div className="current-connection"><CheckCircle2 size={17}/><span>App Store Connect API connected with key <strong>{status.appstoreKeyId}</strong></span></div>}
+      <label>Issuer ID<input value={appStoreIssuerId} onChange={event => setAppStoreIssuerId(event.target.value)} placeholder="App Store Connect Issuer ID" /></label>
+      <label>Key ID<input value={appStoreKeyId} onChange={event => setAppStoreKeyId(event.target.value)} placeholder="API Key ID" /></label>
+      <label>Private API key (.p8 contents)<textarea value={appStorePrivateKey} onChange={event => setAppStorePrivateKey(event.target.value)} placeholder="-----BEGIN PRIVATE KEY-----" rows="7" spellCheck="false" /></label>
+      <p className="security-note">Use an App Store Connect API key with read access to mystc KW (Apple ID 511293831). Apple private keys can only be downloaded once; this value is encrypted on the dashboard server.</p>
+      <button className="secondary-button" disabled={busy || !appStoreIssuerId || !appStoreKeyId || !appStorePrivateKey} onClick={saveAppStore}>Save App Store connection</button>
       {message && <div className={`form-message ${message.type}`}><AlertTriangle size={16} />{message.text}</div>}
       <div className="modal-actions">
         <button className="secondary-button" disabled={busy || !propertyId || !json} onClick={() => submit('test')}>Test connection</button>
@@ -822,7 +1090,9 @@ function App() {
   const [quality, setQuality] = useState(null)
   const [inventory, setInventory] = useState(null)
   const [adjust, setAdjust] = useState(null)
-  const [assistantMessages, setAssistantMessages] = useState([{ role: 'assistant', text: 'Ask me for a report from the connected GA4 and Adjust data. I can also compare both sources.' }])
+  const [playstore, setPlaystore] = useState(null)
+  const [appStore, setAppStore] = useState(null)
+  const [assistantMessages, setAssistantMessages] = useState([])
   const today = new Date().toISOString().slice(0, 10)
   const defaultFrom = new Date(Date.now() - 27 * 86400000).toISOString().slice(0, 10)
   const [customFrom, setCustomFrom] = useState(defaultFrom)
@@ -837,6 +1107,10 @@ function App() {
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('eventscope-sidebar-collapsed') === 'true')
+
+  useEffect(() => {
+    if (auth?.authenticated && assistantMessages.length === 0) setAssistantMessages([{ role: 'assistant', text: akGreeting(auth.user?.displayName || auth.user?.username) }])
+  }, [auth, assistantMessages.length])
 
   const allowed = auth?.user?.dashboards || []
   const isSuperAdmin = auth?.user?.role === 'super_admin'
@@ -951,6 +1225,17 @@ function App() {
   }, [view, appliedFrom, appliedTo, appliedScope, refreshKey, status.adjustConnected])
 
   useEffect(() => {
+    if (view !== 'playstore' || !status.playstoreConnected) return
+    setLoading(true); setError('')
+    request('/playstore').then(setPlaystore).catch(error => setError(error.message)).finally(() => setLoading(false))
+  }, [view, refreshKey, status.playstoreConnected])
+
+  useEffect(() => {
+    if (view !== 'playstore' || !status.appstoreConnected) return
+    request('/appstore').then(setAppStore).catch(error => setError(error.message))
+  }, [view, refreshKey, status.appstoreConnected])
+
+  useEffect(() => {
     if (view !== 'quality' || !status.connected) return
     setLoading(true); setError('')
     request(`/quality?startDate=${appliedFrom}&endDate=${appliedTo}&scope=${appliedScope}`)
@@ -1060,23 +1345,30 @@ function App() {
       { title: `${report.platform} complete event checklist`, headers: ['Event','Users','Events','Status'], rows: report.events.map(row => [row.eventName,row.totalUsers,row.eventCount,report.failures.some(failure => failure.eventName === row.eventName) ? 'Failure' : row.eventCount ? 'Tracked' : 'Not received']) },
       { title: `${report.platform} eSIM QR and activation`, headers: ['Signal','Users','Events','Availability'], rows: [['eSIM activated',report.esim.activated.totalUsers,report.esim.activated.eventCount,'Tracked'],['eSIM activation failed',report.esim.activationFailed.totalUsers,report.esim.activationFailed.eventCount,'Tracked'],['QR generated or displayed',report.esim.qrGenerated.totalUsers,report.esim.qrGenerated.eventCount,report.esim.qrDeliveryInstrumented ? 'Tracked' : 'Not instrumented'],['QR not received or failed',report.esim.qrFailed.totalUsers,report.esim.qrFailed.eventCount,report.esim.qrDeliveryInstrumented ? 'Tracked' : 'Not available']] }
     ]))
-    if (view === 'lifecycle' && lifecycle) downloadCsv('mystc-app-lifecycle', [
+    if (view === 'lifecycle' && lifecycle) downloadCsv('ga4-app-lifecycle', [
       { title: 'Summary', headers: ['Installs / first opens','Install users','Android uninstalls','Uninstall users','Net lifecycle events'], rows: [[lifecycle.summary.installs,lifecycle.summary.installUsers,lifecycle.summary.uninstalls,lifecycle.summary.uninstallUsers,lifecycle.summary.netInstalls]] },
       { title: 'Daily lifecycle activity', headers: ['Date','Installs','Install users','Uninstalls','Uninstall users'], rows: lifecycle.trend.map(r => [r.date,r.installs,r.installUsers,r.uninstalls,r.uninstallUsers]) },
       { title: 'Platform detail', headers: ['Platform','Event','Events','Users'], rows: lifecycle.platforms.map(r => [r.platform,r.eventName,r.eventCount,r.totalUsers]) },
       { title: 'App version detail', headers: ['App version','Event','Events','Users'], rows: lifecycle.versions.map(r => [r.appVersion,r.eventName,r.eventCount,r.totalUsers]) }
     ])
-    if (view === 'adjust' && adjust) downloadCsv('adjust-app-installs', [
+    if (view === 'adjust' && adjust) downloadCsv('adjust-performance-and-events', [
       { title: 'Daily installs and usage', headers: ['Date','Installs','Uninstalls','Sessions','DAU','MAU','Reattributions','Clicks','Impressions'], rows: adjust.trend.map(r => [r.day,r.installs,r.uninstalls,r.sessions,r.daus,r.maus,r.reattributions,r.clicks,r.impressions]) },
       { title: 'Apps and platforms by date and version', headers: ['Date','App','App token','App version','OS','Platform','Installs','Uninstalls','Sessions','DAU','MAU'], rows: adjust.apps.map(r => [r.day,r.app,r.app_token,r.app_version && r.app_version !== 'unknown' ? r.app_version : 'Not reported',r.os_name,r.platform,r.installs,r.uninstalls,r.sessions,r.daus,r.maus]) },
-      { title: 'Attributed acquisition detail', headers: ['App','OS','Platform','Network','Campaign','Ad group','Creative','Installs','Uninstalls','Sessions','Clicks','Impressions'], rows: adjust.acquisition.map(r => [r.app,r.os_name,r.platform,r.network,r.campaign,r.adgroup || 'Not reported',r.creative || 'Not reported',r.installs,r.uninstalls,r.sessions,r.clicks,r.impressions]) }
+      { title: 'Attributed acquisition detail', headers: ['App','OS','Platform','Network','Campaign','Ad group','Creative','Installs','Uninstalls','Sessions','Clicks','Impressions'], rows: adjust.acquisition.map(r => [r.app,r.os_name,r.platform,r.network,r.campaign,r.adgroup || 'Not reported',r.creative || 'Not reported',r.installs,r.uninstalls,r.sessions,r.clicks,r.impressions]) },
+      { title: 'Custom events by app and platform', headers: ['App','App token','OS','Platform',...(adjust.eventMetrics || []).map(r => r.label),'Total custom events'], rows: (adjust.eventPlatforms || []).map(r => [r.app,r.app_token,r.os_name,r.platform,...(adjust.eventMetrics || []).map(d => r[d.metric] || 0),r.totalCustomEvents || 0]) }
     ])
     if (view === 'comparison' && lifecycle && adjust) {
       const comparison = buildComparison(lifecycle, adjust)
       downloadCsv('ga4-vs-adjust-installs', [
         { title: 'Summary', headers: ['GA4 first opens','Adjust installs','GA4 Android uninstalls','Adjust uninstalls','Adjust sessions','Adjust DAU','Adjust MAU','Adjust web installs','Difference (Adjust - GA4)','Variance vs GA4'], rows: [[comparison.ga4Installs,comparison.adjustInstalls,comparison.ga4Uninstalls,comparison.adjustUninstalls,comparison.sessions,comparison.daus,comparison.maus,comparison.webInstalls,comparison.difference,comparison.variancePct == null ? '' : comparison.variancePct]] },
         { title: 'Daily comparison', headers: ['Date','GA4 first opens','Adjust installs','Difference (Adjust - GA4)','Variance vs GA4'], rows: comparison.daily.map(r => [r.date,r.ga4Installs,r.adjustInstalls,r.difference,r.variancePct ?? '']) },
-        { title: 'Platform comparison', headers: ['Platform','GA4 first opens','GA4 uninstalls','Adjust installs','Adjust uninstalls','Sessions','DAU','MAU','Difference (Adjust - GA4)','Variance vs GA4'], rows: comparison.platforms.map(r => [r.platform,r.ga4Installs,r.ga4Uninstalls,r.adjustInstalls,r.adjustUninstalls,r.sessions,r.daus,r.maus,r.difference,r.variancePct ?? '']) }
+        { title: 'Platform comparison', headers: ['Platform','GA4 first opens','GA4 uninstalls','Adjust installs','Adjust uninstalls','Sessions','DAU','MAU','Difference (Adjust - GA4)','Variance vs GA4'], rows: comparison.platforms.map(r => [r.platform,r.ga4Installs,r.ga4Uninstalls,r.adjustInstalls,r.adjustUninstalls,r.sessions,r.daus,r.maus,r.difference,r.variancePct ?? '']) },
+        { title: 'GA4 lifecycle by app version', headers: ['App version','Event','Events','Users'], rows: lifecycle.versions.map(r => [r.appVersion,r.eventName,r.eventCount,r.totalUsers]) },
+        { title: 'Adjust apps and versions', headers: ['Date','App','App token','App version','OS','Platform','Installs','Uninstalls','Sessions','DAU','MAU'], rows: adjust.apps.map(r => [r.day,r.app,r.app_token,r.app_version,r.os_name,r.platform,r.installs,r.uninstalls,r.sessions,r.daus,r.maus]) },
+        { title: 'GA4 events', headers: ['Event','Events','Users','Key events'], rows: (data?.events || []).map(r => [r.eventName,r.eventCount,r.totalUsers,r.keyEvents]) },
+        { title: 'GA4 traffic sources', headers: ['Source / medium','Sessions','Active users'], rows: (data?.sources || []).map(r => [r.sessionSourceMedium,r.sessions,r.activeUsers]) },
+        { title: 'Adjust event coverage', headers: ['Event','Metric','App events','Web events','Web status'], rows: comparison.eventCoverage.map(r => [r.label,r.metric,r.app,r.web,r.web > 0 ? 'Reported' : 'No events returned']) },
+        { title: 'Adjust acquisition detail', headers: ['App','OS','Platform','Network','Campaign','Ad group','Creative','Installs','Uninstalls','Sessions','Clicks','Impressions'], rows: adjust.acquisition.map(r => [r.app,r.os_name,r.platform,r.network,r.campaign,r.adgroup,r.creative,r.installs,r.uninstalls,r.sessions,r.clicks,r.impressions]) }
       ])
     }
     if (view === 'quality' && quality) downloadCsv('engagement-and-app-stability', [
@@ -1093,8 +1385,16 @@ function App() {
     if (view === 'urls' && inventory) downloadCsv('stc-url-inventory', [
       { title: 'STC URL inventory', headers: ['URL','Page title','Status','Language','Sitemap status','First detected','Sitemap last modified','Google first seen','Page views','Users','Sessions'], rows: inventory.urls.map(r => [r.url,r.pageTitle || '',r.isNew ? 'New' : 'Existing',r.language,r.inSitemap ? 'Listed' : 'GA4 only',r.firstSeen,r.lastModified || '',r.googleFirstSeen || 'Search Console required',r.screenPageViews,r.activeUsers,r.sessions]) }
     ])
-    if (view === 'assistant' && assistantMessages.length) downloadCsv('analytics-assistant-report', [
-      { title: `Analytics assistant · ${appliedFrom} to ${appliedTo}`, headers: ['Speaker','Report'], rows: assistantMessages.map(message => [message.role === 'assistant' ? 'Analytics assistant' : 'User', message.text]) }
+    if (view === 'playstore') downloadCsv('app-stores-mystc-kw', [
+      { title: 'Store summary', headers: ['Store','App','Identifier','Connection','Source'], rows: [['Google Play','mystc KW',playstore?.packageName || 'com.pixilapps.selfcare',status.playstoreConnected ? 'Connected' : 'Not connected','Developer Reporting API + console snapshot'],['Apple App Store','mystc KW','511293831',status.appstoreConnected ? 'Connected' : 'Not connected','App Store Connect API']] },
+      { title: 'Store acquisition coverage', headers: ['Store','Metric','Value','Freshness','Limitation'], rows: [['Google Play','Installs',233000,'Play Console snapshot observed Oct 1, 2026','Daily and version acquisition data are not exposed by the connected Developer Reporting API'],['Google Play','Uninstalls','Not connected','Current connection','Not exposed by the connected API'],['Apple App Store','Downloads','Not connected','Current connection','Analytics Reports ingestion is not configured'],['Apple App Store','Installations and deletions','Not connected','Current connection','Requires an Analytics Report Request and report ingestion']] },
+      { title: 'Google Play daily quality', headers: ['Date','Crash rate','7d crash rate','28d crash rate','User-perceived crash rate','ANR rate','7d ANR rate','28d ANR rate','User-perceived ANR rate','Measured users'], rows: (playstore?.crashTrend || []).map(row => { const anrRow = playstore?.anrTrend?.find(item => item.date === row.date) || {}; return [row.date,row.crashRate,row.crashRate7dUserWeighted,row.crashRate28dUserWeighted,row.userPerceivedCrashRate,anrRow.anrRate,anrRow.anrRate7dUserWeighted,anrRow.anrRate28dUserWeighted,anrRow.userPerceivedAnrRate,row.distinctUsers] }) },
+      { title: 'Apple app metadata', headers: ['Apple ID','Name','Bundle ID','SKU','Primary locale'], rows: (appStore?.apps || []).filter(row => row.id === '511293831').map(row => [row.id,row.name,row.bundleId,row.sku,row.primaryLocale]) },
+      { title: 'Apple release history', headers: ['Version','Platform','State','Release type','Created date','Copyright'], rows: (appStore?.versions || []).map(row => [row.version,row.platform,row.state,row.releaseType,row.createdDate,row.copyright]) },
+      { title: 'Apple builds', headers: ['Version','Uploaded','Expires','Expired','Minimum OS','Processing state','Audience'], rows: (appStore?.builds || []).map(row => [row.version,row.uploadedDate,row.expirationDate,row.expired,row.minOsVersion,row.processingState,row.buildAudienceType]) }
+    ])
+    if (view === 'assistant' && assistantMessages.length) downloadCsv('ask-ak-report', [
+      { title: `Ask AK · ${appliedFrom} to ${appliedTo}`, headers: ['Speaker','Report'], rows: assistantMessages.map(message => [message.role === 'assistant' ? 'AK' : 'User', message.text]) }
     ])
   }
 
@@ -1116,13 +1416,15 @@ function App() {
     'plans-items': ['Plans & items', 'Review all English and Arabic products, offers and vouchers reported in GA4.'],
     'journey-monitoring': ['Journey Monitoring', 'Find failed, cancelled and payment journeys blocking sales.'],
     funnels: ['Funnels', 'Monitor multiple web and app journeys, completion, abandonment and failures.'],
-    lifecycle: ['mySTC app lifecycle', 'Monitor app installs and Android uninstall signals.'],
-    adjust: ['Adjust app installs', 'Monitor attributed installs, networks and campaigns from Adjust.'],
+    lifecycle: ['GA4 app lifecycle', 'Monitor GA4 first-open and Android app-remove signals.'],
+    adjust: ['Adjust analytics', 'Analyze Adjust attribution, usage, platforms, acquisition and configured events.'],
     comparison: ['GA4 vs Adjust', 'Compare install reporting across GA4 and Adjust.'],
     quality: ['Engagement & app stability', 'Monitor website bounce, engagement and app crash health.'],
     campaigns: ['Campaign & UTM monitoring', 'Monitor production UTM links and GA4 attribution.'],
     urls: ['STC URL inventory', 'Review sitemap URLs, GA4 activity and Google Search visibility.'],
-    assistant: ['AI analytics assistant', 'Ask questions and generate reports from the connected analytics data.'],
+    playstore: ['App Stores', 'Monitor mystc KW across Google Play and Apple App Store Connect.'],
+    assistant: ['Ask AK', 'Ask AK questions and generate reports from all connected dashboard data.'],
+    settings: ['Settings', 'Review connection status and manage analytics integrations.'],
     'access-control': ['Access control', 'Approve access requests, assign dashboards and reset passwords.']
   }
 
@@ -1142,20 +1444,18 @@ function App() {
         {show('plans-items') && <button title="Plans & items" className={view === 'plans-items' ? 'active' : ''} onClick={() => navigateFromSidebar('plans-items')}><ShoppingCart size={18}/><span>Plans &amp; items</span></button>}
         {show('journey-monitoring') && <button title="Journey Monitoring" className={view === 'journey-monitoring' ? 'active' : ''} onClick={() => navigateFromSidebar('journey-monitoring')}><Siren size={18}/><span>Journey Monitoring</span></button>}
         {show('funnels') && <button title="Funnels" className={view === 'funnels' ? 'active' : ''} onClick={() => navigateFromSidebar('funnels')}><Route size={18}/><span>Funnels</span></button>}
-        {show('lifecycle') && <button title="mySTC app lifecycle" className={view === 'lifecycle' ? 'active' : ''} onClick={() => navigateFromSidebar('lifecycle')}><Smartphone size={18}/><span>mySTC app lifecycle</span></button>}
-        {show('adjust') && <button title="Adjust app installs" className={view === 'adjust' ? 'active' : ''} onClick={() => navigateFromSidebar('adjust')}><TrendingUp size={18}/><span>Adjust app installs</span></button>}
+        {show('lifecycle') && <button title="GA4 app lifecycle" className={view === 'lifecycle' ? 'active' : ''} onClick={() => navigateFromSidebar('lifecycle')}><Smartphone size={18}/><span>GA4 app lifecycle</span></button>}
+        {show('adjust') && <button title="Adjust analytics" className={view === 'adjust' ? 'active' : ''} onClick={() => navigateFromSidebar('adjust')}><TrendingUp size={18}/><span>Adjust analytics</span></button>}
         {show('comparison') && <button title="GA4 vs Adjust" className={view === 'comparison' ? 'active' : ''} onClick={() => navigateFromSidebar('comparison')}><GitCompareArrows size={18}/><span>GA4 vs Adjust</span></button>}
         {show('quality') && <button title="Engagement & stability" className={view === 'quality' ? 'active' : ''} onClick={() => navigateFromSidebar('quality')}><Bug size={18}/><span>Engagement & stability</span></button>}
         {show('campaigns') && <button title="Campaigns & UTM" className={view === 'campaigns' ? 'active' : ''} onClick={() => navigateFromSidebar('campaigns')}><TrendingUp size={18}/><span>Campaigns &amp; UTM</span></button>}
         {show('urls') && <button title="STC URL inventory" className={view === 'urls' ? 'active' : ''} onClick={() => navigateFromSidebar('urls')}><Link2 size={18}/><span>STC URL inventory</span></button>}
-        {show('assistant') && <button title="AI analytics assistant" className={view === 'assistant' ? 'active' : ''} onClick={() => navigateFromSidebar('assistant')}><Bot size={18}/><span>AI analytics assistant</span></button>}
+        {show('playstore') && <button title="App Stores" className={view === 'playstore' ? 'active' : ''} onClick={() => navigateFromSidebar('playstore')}><Smartphone size={18}/><span>App Stores</span></button>}
+        {show('assistant') && <button title="Ask AK" className={view === 'assistant' ? 'active' : ''} onClick={() => navigateFromSidebar('assistant')}><Bot size={18}/><span>Ask AK</span></button>}
+        {isSuperAdmin && <button title="Settings" className={view === 'settings' ? 'active' : ''} onClick={() => navigateFromSidebar('settings')}><Settings2 size={18}/><span>Settings</span></button>}
         {isSuperAdmin && <button title="Access control" className={view === 'access-control' ? 'active' : ''} onClick={() => navigateFromSidebar('access-control')}><UserCog size={18}/><span>Access control</span></button>}
       </nav>
       <div className="sidebar-bottom">
-        <div className={`connection-pill ${status.connected ? 'online' : ''}`}><span />{status.connected ? 'GA4 connected' : 'GA4 not connected'}</div>
-        <div className={`connection-pill ${status.firebaseConnected ? 'online' : ''}`}><span />{status.firebaseConnected ? 'Firebase connected' : 'Firebase not connected'}</div>
-        <div className={`connection-pill ${status.adjustConnected ? 'online' : ''}`}><span />{status.adjustConnected ? 'Adjust connected' : 'Adjust not connected'}</div>
-        {isSuperAdmin && <button className="sidebar-settings" onClick={() => setSettingsOpen(true)}><Settings2 size={18}/><span>Analytics settings</span></button>}
         <div className="signed-in"><LockKeyhole size={15}/><span>{auth.user.username}<small>{isSuperAdmin ? 'Super Admin' : 'Viewer'}</small></span></div>
         <button className="sidebar-settings" onClick={logout}><LogOut size={18}/><span>Sign out</span></button>
       </div>
@@ -1163,12 +1463,12 @@ function App() {
     <div className="workspace">
     <header className="topbar">
       <div><strong>{viewTitles[view][0]}</strong><span>{viewTitles[view][1]}</span></div>
-      {view !== 'access-control' && <button className="secondary-button" onClick={exportCurrentDashboard} disabled={!status.connected || loading}><Download size={17}/>Export current dashboard</button>}
+      {!['access-control','settings'].includes(view) && <button className="secondary-button" onClick={exportCurrentDashboard} disabled={!status.connected || loading}><Download size={17}/>Export current dashboard</button>}
     </header>
     <main>
       <section className="page-heading">
         <div><p className="eyebrow">Analytics operations</p><h1>{viewTitles[view][0]}</h1><p>{viewTitles[view][1]}</p></div>
-        {view !== 'access-control' && <div className="heading-actions">
+        {!['access-control','settings','playstore'].includes(view) && <div className="heading-actions">
           <label className="scope-filter">Platform<select aria-label="Platform scope" value={scope} onChange={event => setScope(event.target.value)} disabled={loading}><option value="all">All</option><option value="web">Web</option><option value="app">App</option></select></label>
           <div className="custom-dates"><label>From<input aria-label="From date" type="date" value={customFrom} max={customTo || today} onChange={event => setCustomFrom(event.target.value)}/></label><label>To<input aria-label="To date" type="date" value={customTo} min={customFrom} max={today} onChange={event => setCustomTo(event.target.value)}/></label></div>
           <button className="primary-button apply-dates" onClick={applyDates} disabled={!status.connected || loading || !datesValid}>{loading ? <RefreshCw size={17} className="spin"/> : <RefreshCw size={17}/>}Apply dates</button>
@@ -1183,7 +1483,7 @@ function App() {
 
       {error && <div className="error-banner"><AlertTriangle size={18} /><div><strong>Analytics refresh failed</strong><span>{error}</span></div><button onClick={() => loadData(true)}>Try again</button></div>}
 
-      {view === 'access-control' ? <AccessControlView/> : view === 'overview' ? <MainOverviewView data={overview} onOpen={openOverviewDetail} /> : view === 'legacy-overview' ? <><section className="metric-grid">
+      {view === 'access-control' ? <AccessControlView/> : view === 'settings' ? <SettingsDashboard status={status} onConfigure={() => setSettingsOpen(true)}/> : view === 'overview' ? <MainOverviewView data={overview} onOpen={openOverviewDetail} /> : view === 'legacy-overview' ? <><section className="metric-grid">
         <Metric icon={Users} label="Active users" value={data?.summary?.activeUsers} detail={status.connected ? 'Selected period' : 'Waiting for connection'} />
         <Metric icon={MousePointer2} label="Events" value={data?.summary?.eventCount} detail={status.connected ? 'All reported events' : 'Waiting for connection'} tone="blue" />
         <Metric icon={Eye} label="Page views" value={data?.summary?.screenPageViews} detail={status.connected ? 'Pages and screens' : 'Waiting for connection'} tone="purple" />
@@ -1220,11 +1520,12 @@ function App() {
         <Panel className="table-panel" title="All reported events" subtitle="Search and inspect every event returned for this period" action={<button className="secondary-button compact" onClick={exportEvents} disabled={!data?.events?.length}><Download size={16}/>Export CSV</button>}>
           {data?.events ? <EventsTable rows={data.events} /> : <EmptyPanel title="No event catalog yet" copy="Connect GA4 to populate the full event list." />}
         </Panel>
-      </section></> : view === 'journey' ? <JourneyView data={journey} requestedUrl={pageUrl} onAnalyze={url => analyzeUrl(url, 'journey')} loading={loading} /> : view === 'plans-items' ? <PlansItemsView data={products} /> : view === 'journey-monitoring' ? <JourneyMonitoringView data={journeyMonitoring}/> : view === 'funnels' ? <FunnelsView data={funnel} journey={funnelJourney} onJourneyChange={setFunnelJourney}/> : view === 'lifecycle' ? <AppLifecycleView data={lifecycle} /> : view === 'adjust' ? <AdjustInstallsView data={adjust} connected={status.adjustConnected} /> : view === 'comparison' ? <ComparisonView lifecycle={lifecycle} adjust={adjust} connected={status.adjustConnected} /> : view === 'quality' ? <QualityView data={quality} /> : view === 'campaigns' ? <CampaignsView data={campaigns} /> : view === 'urls' ? <UrlInventoryView data={inventory} /> : <AnalyticsAssistant context={{ data, journey, products, funnel, lifecycle, adjust, quality, inventory, from: appliedFrom, to: appliedTo }} messages={assistantMessages} setMessages={setAssistantMessages} />}
+      </section></> : view === 'journey' ? <JourneyView data={journey} requestedUrl={pageUrl} onAnalyze={url => analyzeUrl(url, 'journey')} loading={loading} /> : view === 'plans-items' ? <PlansItemsView data={products} /> : view === 'journey-monitoring' ? <JourneyMonitoringView data={journeyMonitoring}/> : view === 'funnels' ? <FunnelsView data={funnel} journey={funnelJourney} onJourneyChange={setFunnelJourney}/> : view === 'lifecycle' ? <AppLifecycleView data={lifecycle} /> : view === 'adjust' ? <AdjustAnalyticsView data={adjust} connected={status.adjustConnected} /> : view === 'comparison' ? <ComparisonView lifecycle={lifecycle} adjust={adjust} ga4={data} connected={status.adjustConnected} /> : view === 'quality' ? <QualityView data={quality} /> : view === 'campaigns' ? <CampaignsView data={campaigns} /> : view === 'urls' ? <UrlInventoryView data={inventory} /> : view === 'playstore' ? <PlaystoreView data={playstore} appStoreData={appStore} connected={status.playstoreConnected} appStoreConnected={status.appstoreConnected} /> : <AnalyticsAssistant context={{ data, overview, campaigns, journey, journeyMonitoring, products, funnel, lifecycle, adjust, quality, inventory, from: appliedFrom, to: appliedTo }} messages={assistantMessages} setMessages={setAssistantMessages} />}
 
       <footer><div><ShieldCheck size={16}/>Credentials stay encrypted on this server.</div><div><Clock3 size={16}/>Last refreshed: {data?.generatedAt ? new Date(data.generatedAt).toLocaleString() : 'Not yet refreshed'}</div><div><Globe2 size={16}/>Property: {status.propertyId || 'Not connected'}</div></footer>
     </main>
     </div>
+    <AkFloatingAssistant context={{ data, overview, campaigns, journey, journeyMonitoring, products, funnel, lifecycle, adjust, quality, inventory, from: appliedFrom, to: appliedTo }} messages={assistantMessages} setMessages={setAssistantMessages}/>
     {settingsOpen && <SettingsModal status={status} onClose={() => setSettingsOpen(false)} onSaved={saved} />}
   </div>
 }

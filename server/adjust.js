@@ -1,5 +1,23 @@
 const REPORT_URL = 'https://automate.adjust.com/reports-service/report'
 
+export const ADJUST_EVENT_METRICS = [
+  ['purchase_evoucher_events', 'Voucher purchases'],
+  ['purchase_postpaid_events', 'Postpaid purchases'],
+  ['purchase_prepaid_events', 'Prepaid purchases'],
+  ['purchase_addon_events', 'Add-on purchases'],
+  ['purchase_device_events', 'Device purchases'],
+  ['purchase_roaming_events', 'Roaming purchases'],
+  ['purchase_quickpay_events', 'Quick Pay purchases'],
+  ['purchase_recharge_events', 'Recharge purchases'],
+  ['purchase_billpayment_events', 'Bill payments'],
+  ['purchase_vas_events', 'VAS purchases'],
+  ['purchase_offer_events', 'Offer purchases'],
+  ['purchase_tamayouz_events', 'Tamayouz purchases'],
+  ['purchase_youth_events', 'Youth purchases'],
+  ['joined_qitaf_events', 'Qitaf joins'],
+  ['spent_points_events', 'Qitaf points spent']
+]
+
 async function report(token, parameters) {
   const url = new URL(REPORT_URL)
   Object.entries(parameters).forEach(([key, value]) => url.searchParams.set(key, value))
@@ -31,11 +49,13 @@ export async function adjustInstallDashboard(token, startDate, endDate, requeste
   const date_period = `${startDate}:${endDate}`
   const metrics = 'installs,reattributions,attribution_clicks,attribution_impressions,sessions,maus,daus,uninstalls'
   const scope = ['web', 'app'].includes(String(requestedScope || '').toLowerCase()) ? String(requestedScope).toLowerCase() : 'all'
-  const [daily, apps, platforms, acquisition] = await Promise.all([
+  const [daily, apps, platforms, acquisition, eventPlatforms] = await Promise.all([
     report(token, { date_period, dimensions: 'day,os_name,platform', metrics }),
     report(token, { date_period, dimensions: 'day,app,app_token,app_version,os_name,platform', metrics }),
     report(token, { date_period, dimensions: 'app,app_token,os_name,platform', metrics }),
-    report(token, { date_period, dimensions: 'app,os_name,platform,network,campaign,adgroup,creative', metrics: 'installs,uninstalls,sessions,attribution_clicks,attribution_impressions', sort: '-installs' })
+    report(token, { date_period, dimensions: 'app,os_name,platform,network,campaign,adgroup,creative', metrics: 'installs,uninstalls,sessions,attribution_clicks,attribution_impressions', sort: '-installs' }),
+    report(token, { date_period, dimensions: 'app,app_token,os_name,platform', metrics: ADJUST_EVENT_METRICS.map(([metric]) => metric).join(',') })
+      .catch(error => ({ rows: [], totals: {}, warnings: [], unavailable: error.message }))
   ])
   const normalize = row => {
     const result = { ...row }
@@ -54,6 +74,12 @@ export async function adjustInstallDashboard(token, startDate, endDate, requeste
   const appRows = (apps.rows || []).map(normalize).filter(matchesScope)
   const platformRows = (platforms.rows || []).map(normalize).filter(matchesScope)
   const acquisitionRows = (acquisition.rows || []).map(normalize).filter(matchesScope)
+  const eventRows = (eventPlatforms.rows || []).map(row => {
+    const normalized = { ...row }
+    for (const [metric] of ADJUST_EVENT_METRICS) normalized[metric] = Number(row[metric] || 0)
+    normalized.totalCustomEvents = ADJUST_EVENT_METRICS.reduce((total, [metric]) => total + normalized[metric], 0)
+    return normalized
+  }).filter(matchesScope)
   return {
     generatedAt: new Date().toISOString(),
     period: { startDate, endDate },
@@ -63,6 +89,10 @@ export async function adjustInstallDashboard(token, startDate, endDate, requeste
     apps: appRows,
     platforms: platformRows,
     acquisition: acquisitionRows,
-    warnings: [...(daily.warnings || []), ...(apps.warnings || []), ...(platforms.warnings || []), ...(acquisition.warnings || [])]
+    eventPlatforms: eventRows,
+    eventMetrics: ADJUST_EVENT_METRICS.map(([metric, label]) => ({ metric, label })),
+    eventCoverageAvailable: !eventPlatforms.unavailable,
+    eventCoverageError: eventPlatforms.unavailable || '',
+    warnings: [...(daily.warnings || []), ...(apps.warnings || []), ...(platforms.warnings || []), ...(acquisition.warnings || []), ...(eventPlatforms.warnings || [])]
   }
 }

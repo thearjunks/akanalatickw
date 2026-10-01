@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-export const DASHBOARDS = ['overview','journey','plans-items','journey-monitoring','funnels','lifecycle','adjust','comparison','quality','campaigns','urls','assistant']
+export const DASHBOARDS = ['overview','journey','plans-items','journey-monitoring','funnels','lifecycle','adjust','comparison','quality','campaigns','urls','playstore','assistant']
 const sessions = new Map()
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -47,7 +47,7 @@ export function createAuth(privateDir) {
   const dashboardsForPath = pathName => ({
     '/dashboard':['overview'],'/main-overview':['overview'],'/realtime':['overview'],'/page-journey':['journey'],'/products-items':['plans-items'],
     '/journey-monitoring':['journey-monitoring'],'/prepaid-gnl-funnel':['funnels'],'/funnels':['funnels'],'/app-lifecycle':['lifecycle','comparison'],
-    '/adjust-installs':['adjust','comparison'],'/quality':['quality'],'/campaigns':['campaigns'],'/url-inventory':['urls']
+    '/adjust-installs':['adjust','comparison'],'/quality':['quality'],'/campaigns':['campaigns'],'/url-inventory':['urls'],'/playstore':['playstore'],'/appstore':['playstore']
   })[pathName]
 
   const routes = app => {
@@ -69,7 +69,7 @@ export function createAuth(privateDir) {
     })
     app.use('/api', requireUser)
     app.use('/api', (req, res, next) => {
-      if ((req.path.startsWith('/settings') || req.path === '/adjust-settings' || (req.path === '/campaigns' && req.method !== 'GET')) && req.user.role !== 'super_admin') return res.status(403).json({ error: 'Super Admin access is required.' })
+      if ((req.path.startsWith('/settings') || req.path === '/adjust-settings' || req.path === '/playstore-settings' || req.path === '/appstore-settings' || (req.path === '/campaigns' && req.method !== 'GET')) && req.user.role !== 'super_admin') return res.status(403).json({ error: 'Super Admin access is required.' })
       const dashboards = dashboardsForPath(req.path)
       return !dashboards || dashboards.some(dashboard => canAccess(req.user, dashboard)) ? next() : res.status(403).json({ error: 'You do not have access to this dashboard.' })
     })

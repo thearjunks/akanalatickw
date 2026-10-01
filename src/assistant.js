@@ -5,7 +5,7 @@ const top = (rows, value, label, limit = 5) => (rows || []).slice(0, limit).map(
 
 export function answerAnalyticsQuestion(question, context) {
   const q = question.toLowerCase()
-  const { data, journey, lifecycle, adjust, from, to } = context
+  const { data, overview, campaigns, journey, journeyMonitoring, products, funnel, lifecycle, adjust, quality, inventory, from, to } = context
   const period = `${from} to ${to}`
   if (!question.trim()) return 'Please enter a question about the available analytics data.'
 
@@ -22,9 +22,30 @@ export function answerAnalyticsQuestion(question, context) {
     return `Top traffic sources for ${period}: ${top(rows, 'sessions', label)}.`
   }
   if (/campaign/.test(q)) {
+    if (campaigns?.campaigns?.length) return `Campaign reporting for ${period}: ${n(campaigns.summary?.sessions)} sessions, ${n(campaigns.summary?.users)} users, ${n(campaigns.summary?.purchases)} purchases and ${n(campaigns.summary?.revenue)} revenue. Top campaigns: ${top(campaigns.campaigns, 'sessions', 'sessionCampaignName')}.`
     if (journey?.acquisition?.length) return `Top campaigns for ${journey.page.url}: ${top(journey.acquisition, 'sessions', 'sessionCampaignName')}.`
     if (adjust?.acquisition?.length) return `Top Adjust campaigns: ${top(adjust.acquisition, 'installs', 'campaign')}.`
     return 'No campaign rows are available for this reporting period.'
+  }
+  if (/bounce|engagement/.test(q)) {
+    if (!quality?.web) return 'Website engagement data is not available for this reporting period.'
+    return `For ${period}, the website recorded ${n(quality.web.summary.sessions)} sessions, ${(Number(quality.web.summary.engagementRate || 0) * 100).toFixed(1)}% engagement rate and ${(Number(quality.web.summary.bounceRate || 0) * 100).toFixed(1)}% bounce rate.`
+  }
+  if (/crash|stability|exception/.test(q)) {
+    if (!quality?.crashes) return 'App crash data is not available for this reporting period.'
+    return `For ${period}, GA4 reported ${n(quality.crashes.summary.crashCount)} crash events affecting ${n(quality.crashes.summary.crashAffectedUsers)} users. Crash-free user rate was ${(Number(quality.crashes.summary.crashFreeUsersRate || 0) * 100).toFixed(2)}%.`
+  }
+  if (/product|plan|voucher|device|bundle|booster|add-on|addon|roaming|qitaf|recharge/.test(q) && overview?.purchases?.length) {
+    return `Completed sales for ${period}: ${overview.purchases.map(row => `${row.productType}: ${n(row.count)}`).join('; ')}. Product catalogue contains ${n(products?.summary?.products)} reported rows and ${n(products?.summary?.vouchers)} voucher rows.`
+  }
+  if (/blocked|failure|failed|cancelled|payment/.test(q) && journeyMonitoring) {
+    return `Journey monitoring for ${period}: ${n(journeyMonitoring.summary.failureEvents)} failure events, ${n(journeyMonitoring.summary.affectedUserReports)} affected-user reports, ${n(journeyMonitoring.summary.failedPayments)} failed payments and ${n(journeyMonitoring.summary.issueRows)} issue locations.`
+  }
+  if (/funnel|completion|abandon/.test(q) && funnel?.reports?.length) {
+    return `${funnel.name} for ${period}: ${funnel.reports.map(report => `${report.platform}: ${n(report.summary.entrants)} entrants, ${n(report.summary.completions)} strict completions, ${n(report.summary.abandonedUsers)} did not complete and ${n(report.summary.failureEvents)} failure events`).join('; ')}.`
+  }
+  if (/url|inventory|sitemap|new link|new url/.test(q) && inventory) {
+    return `STC URL inventory: ${n(inventory.summary.total)} known URLs, ${n(inventory.summary.sitemap)} sitemap URLs, ${n(inventory.summary.ga4Active)} GA4-active URLs and ${n(inventory.summary.new)} newly detected URLs.`
   }
   if (/language|english|arabic|\ben\b|\bar\b/.test(q)) {
     if (!journey?.browserLanguages?.length) return 'No browser-language data is available for the selected URL.'

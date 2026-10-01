@@ -12,3 +12,23 @@ test('compares GA4 first opens with Adjust installs by date and platform', () =>
   assert.deepEqual(result.platforms[0], { platform: 'android', ga4Installs: 100, ga4Uninstalls: 12, adjustInstalls: 80, adjustUninstalls: 8, sessions: 200, daus: 50, maus: 70, difference: -20, variancePct: -0.2 })
   assert.equal(result.webInstalls, 4)
 })
+
+test('flags web traffic when Adjust custom commerce events are zero', () => {
+  const result = buildComparison({}, {
+    scope: 'all',
+    summary: {},
+    platforms: [
+      { platform: 'mobile_app', os_name: 'android', installs: 12, sessions: 80 },
+      { platform: 'web', os_name: 'android', installs: 4, sessions: 20 }
+    ],
+    eventCoverageAvailable: true,
+    eventMetrics: [{ metric: 'purchase_prepaid_events', label: 'Prepaid purchases' }],
+    eventPlatforms: [
+      { platform: 'mobile_app', os_name: 'android', purchase_prepaid_events: 7 },
+      { platform: 'web', os_name: 'android', purchase_prepaid_events: 0 }
+    ]
+  })
+  assert.deepEqual(result.eventTotals, { app: 7, web: 0 })
+  assert.equal(result.activityByGroup.web.sessions, 20)
+  assert.match(result.webCoverageStatus, /Web traffic is present/)
+})

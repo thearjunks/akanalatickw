@@ -5,6 +5,8 @@ import crypto from 'node:crypto'
 import { createAuth } from './auth.js'
 import { hasSettings, loadCampaignRegistry, loadSettings, loadUrlHistory, saveCampaignRegistry, saveSettings, saveUrlHistory } from './crypto-store.js'
 import { adjustInstallDashboard, testAdjustConnection } from './adjust.js'
+import { playstoreDashboard, testPlaystoreConnection, validatePlayServiceAccount } from './playstore.js'
+import { appStoreDashboard, testAppStoreConnection, validateAppStoreCredentials } from './appstore.js'
 import {
   appLifecycleDashboard,
   applyUrlHistory,
@@ -61,7 +63,12 @@ app.get('/api/status', async (req, res, next) => {
       serviceAccountEmail: settings.serviceAccount.client_email,
       configuredAt: settings.configuredAt,
       firebaseConnected: Boolean(settings.firebaseProjectId),
-      adjustConnected: Boolean(settings.adjustToken)
+      adjustConnected: Boolean(settings.adjustToken),
+      playstoreConnected: Boolean(settings.playServiceAccount),
+      playPackageName: settings.playPackageName || 'com.pixilapps.selfcare',
+      playServiceAccountEmail: settings.playServiceAccount?.client_email,
+      appstoreConnected: Boolean(settings.appStoreCredentials),
+      appstoreKeyId: settings.appStoreCredentials?.keyId
     })
   } catch (error) {
     next(error)
@@ -92,7 +99,7 @@ app.post('/api/settings', async (req, res, next) => {
     const result = await testConnection({ propertyId, serviceAccount })
     const configuredAt = new Date().toISOString()
     const current = await loadSettings()
-    await saveSettings({ propertyId, serviceAccount, configuredAt, adjustToken: current?.adjustToken })
+    await saveSettings({ ...current, propertyId, serviceAccount, configuredAt })
     res.json({
       ok: true,
       propertyId,
@@ -121,6 +128,48 @@ app.get('/api/adjust-installs', async (req, res, next) => {
     const settings = await loadSettings()
     if (!settings?.adjustToken) return res.status(409).json({ error: 'Adjust is not configured.' })
     res.json(await adjustInstallDashboard(settings.adjustToken, req.query.startDate, req.query.endDate, req.query.scope))
+  } catch (error) { next(error) }
+})
+
+app.post('/api/playstore-settings', async (req, res, next) => {
+  try {
+    const serviceAccount = typeof req.body.serviceAccountJson === 'string' ? JSON.parse(req.body.serviceAccountJson) : req.body.serviceAccountJson
+    const packageName = String(req.body.packageName || '').trim()
+    validatePlayServiceAccount(serviceAccount)
+    if (!/^[A-Za-z0-9_.]+$/.test(packageName)) return res.status(400).json({ error: 'Enter a valid Android package name.' })
+    const result = await testPlaystoreConnection({ serviceAccount, packageName })
+    const settings = await loadSettings()
+    if (!settings) return res.status(409).json({ error: 'Configure Google Analytics before adding Playstore.' })
+    await saveSettings({ ...settings, playServiceAccount: serviceAccount, playPackageName: result.packageName, playConfiguredAt: new Date().toISOString() })
+    res.json({ ok: true, packageName: result.packageName, appCount: result.apps.length, serviceAccountEmail: serviceAccount.client_email })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/playstore', async (req, res, next) => {
+  try {
+    const settings = await loadSettings()
+    if (!settings?.playServiceAccount) return res.status(409).json({ error: 'Playstore API is not configured.' })
+    res.json(await playstoreDashboard(settings))
+  } catch (error) { next(error) }
+})
+
+app.post('/api/appstore-settings', async (req, res, next) => {
+  try {
+    const credentials = { issuerId: String(req.body.issuerId || '').trim(), keyId: String(req.body.keyId || '').trim(), privateKey: String(req.body.privateKey || '').trim().replace(/\\n/g, '\n') }
+    validateAppStoreCredentials(credentials)
+    const result = await testAppStoreConnection(credentials)
+    const settings = await loadSettings()
+    if (!settings) return res.status(409).json({ error: 'Configure Google Analytics before adding App Store Connect.' })
+    await saveSettings({ ...settings, appStoreCredentials: credentials, appStoreConfiguredAt: new Date().toISOString() })
+    res.json({ ok: true, appCount: result.appCount, keyId: credentials.keyId })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/appstore', async (req, res, next) => {
+  try {
+    const settings = await loadSettings()
+    if (!settings?.appStoreCredentials) return res.status(409).json({ error: 'App Store Connect API is not configured.' })
+    res.json(await appStoreDashboard(settings.appStoreCredentials))
   } catch (error) { next(error) }
 })
 

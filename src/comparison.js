@@ -39,5 +39,28 @@ export function buildComparison(lifecycle, adjust) {
 
   const ga4Installs = lifecycle?.summary?.installs || 0
   const adjustInstalls = adjust?.summary?.installs || 0
-  return { ga4Installs, adjustInstalls, ga4Uninstalls: lifecycle?.summary?.uninstalls || 0, adjustUninstalls: adjust?.summary?.uninstalls || 0, sessions: adjust?.summary?.sessions || 0, daus: adjust?.summary?.daus || 0, maus: adjust?.summary?.maus || 0, webInstalls: platforms.find(row => row.platform === 'web')?.adjustInstalls || 0, difference: adjustInstalls - ga4Installs, variancePct: variance(adjustInstalls, ga4Installs), daily, platforms }
+  const group = row => String(row?.platform || '').toLowerCase().includes('web') ? 'web' : 'app'
+  const activityByGroup = { app: { installs: 0, sessions: 0 }, web: { installs: 0, sessions: 0 } }
+  for (const row of adjust?.platforms || adjust?.apps || []) {
+    const item = activityByGroup[group(row)]
+    item.installs += Number(row.installs || 0)
+    item.sessions += Number(row.sessions || 0)
+  }
+  const eventsByGroup = { app: {}, web: {} }
+  for (const row of adjust?.eventPlatforms || []) {
+    const item = eventsByGroup[group(row)]
+    for (const definition of adjust?.eventMetrics || []) item[definition.metric] = (item[definition.metric] || 0) + Number(row[definition.metric] || 0)
+  }
+  const eventCoverage = (adjust?.eventMetrics || []).map(definition => ({
+    ...definition,
+    app: eventsByGroup.app[definition.metric] || 0,
+    web: eventsByGroup.web[definition.metric] || 0
+  }))
+  const eventTotals = eventCoverage.reduce((totals, row) => ({ app: totals.app + row.app, web: totals.web + row.web }), { app: 0, web: 0 })
+  const webCoverageStatus = adjust?.scope === 'app' ? 'Web excluded by the current platform filter.'
+    : adjust?.eventCoverageAvailable === false ? 'Adjust event coverage could not be queried.'
+      : eventTotals.web > 0 ? 'Web custom events are being reported.'
+        : activityByGroup.web.sessions > 0 ? 'Web traffic is present, but the selected custom commerce events are zero.'
+          : 'No Adjust web activity was returned for this period.'
+  return { ga4Installs, adjustInstalls, ga4Uninstalls: lifecycle?.summary?.uninstalls || 0, adjustUninstalls: adjust?.summary?.uninstalls || 0, sessions: adjust?.summary?.sessions || 0, daus: adjust?.summary?.daus || 0, maus: adjust?.summary?.maus || 0, webInstalls: platforms.find(row => row.platform === 'web')?.adjustInstalls || 0, difference: adjustInstalls - ga4Installs, variancePct: variance(adjustInstalls, ga4Installs), daily, platforms, activityByGroup, eventCoverage, eventTotals, eventCoverageAvailable: adjust?.eventCoverageAvailable !== false, eventCoverageError: adjust?.eventCoverageError || '', webCoverageStatus }
 }
